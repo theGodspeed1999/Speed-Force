@@ -66,3 +66,8 @@ Only download content that you own or are allowed to save, and follow the terms 
 
 Signing keys, build output and the download engine are not in this repository. Filter lists and
 third-party libraries keep their own licences. See [THIRD-PARTY.md](THIRD-PARTY.md).
+
+## License
+
+Speed Force is free software under the [GNU General Public License v3.0](LICENSE). Third-party parts keep
+their own licences; see [THIRD-PARTY.md](THIRD-PARTY.md).
