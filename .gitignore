@@ -1,0 +1,37 @@
+# Only the two app sources go in the repository. Everything else in this folder stays local.
+/*
+!/.gitignore
+!/README.md
+!/THIRD-PARTY.md
+!/SpeedForce-Android/
+!/SpeedForce-Windows/
+
+# secrets and machine files
+SpeedForce-Android/signing/
+SpeedForce-Android/local.properties
+*.jks
+*.keystore
+keystore.properties
+
+# local notes, build output, backups, downloaded tools
+SpeedForce-Android/README.md
+SpeedForce-Android/SECURITY.md
+SpeedForce-Windows/TEST_SITES.md
+SpeedForce-Android/backup/
+SpeedForce-Android/share/
+SpeedForce-Android/test-pages/
+SpeedForce-Android/.gradle/
+SpeedForce-Android/.kotlin/
+SpeedForce-Android/build/
+SpeedForce-Android/app/build/
+SpeedForce-Android/.gitignore
+*.apk
+*.zip
+SpeedForce-Windows/dist/
+SpeedForce-Windows/engine/
+SpeedForce-Windows/shots/
+SpeedForce-Windows/backup/
+SpeedForce-Windows/start/
+SpeedForce-Windows/*.exe
+SpeedForce-Windows/*.dll
+*.o

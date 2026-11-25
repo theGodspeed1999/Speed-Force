@@ -1,0 +1,63 @@
+<!doctype html>
+<html data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data:; style-src 'self'">
+<title>Speed Force</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body>
+<div id="top">
+  <div id="strip">
+    <div id="tabs"></div>
+    <button id="btn-menu" title="Menu">&#x22EE;</button>
+    <div id="lights">
+      <button id="w-min" class="light yellow" title="Minimise"><i>&#x2212;</i></button>
+      <button id="w-max" class="light green" title="Maximise / restore (F11 = full screen)"><i>&#x25A1;</i></button>
+      <button id="w-close" class="light red" title="Close"><i>&#x2715;</i></button>
+    </div>
+  </div>
+  <div id="bar">
+    <button id="back" title="Back (Alt+Left)">&#x2190;</button>
+    <button id="fwd" title="Forward (Alt+Right)">&#x2192;</button>
+    <button id="reload" title="Reload (F5)">&#x27F3;</button>
+    <button id="home" title="Home">&#x2302;</button>
+    <div id="addr-wrap">
+      <button id="btn-shield" class="shield" title="Shields">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" fill="currentColor"/></svg>
+        <b class="badge" hidden></b>
+      </button>
+      <span id="insecure" title="Not secure: this page uses http://" hidden>&#x26A0;</span>
+      <input id="addr" spellcheck="false" placeholder="Search or type a web address">
+      <span id="zoom" hidden></span>
+      <button id="btn-star" class="star" title="Bookmark this page">&#x2606;</button>
+    </div>
+    <button id="videos" class="pill" title="Find videos on this page">&#x2B07; Download</button>
+    <button id="btn-downloads" title="Downloads (Ctrl+J)">&#x2B73;<b class="badge" hidden></b></button>
+  </div>
+  <div id="engines" class="row" hidden></div>
+  <div id="find" class="row" hidden>
+    <input id="find-text" placeholder="Find in page" spellcheck="false">
+    <span id="find-count"></span>
+    <button id="find-prev" title="Previous">&#x2191;</button>
+    <button id="find-next" title="Next">&#x2193;</button>
+    <button id="find-close" title="Close (Esc)">&#x2715;</button>
+  </div>
+  <div id="notice" class="row" hidden>
+    <span id="notice-text"></span>
+    <button id="notice-action" class="link"></button>
+    <button id="notice-close" title="Close">&#x2715;</button>
+  </div>
+</div>
+<aside id="panel" hidden>
+  <header><h2 id="panel-title"></h2><button id="panel-close" title="Close">&#x2715;</button></header>
+  <div id="panel-body"></div>
+</aside>
+<script src="shim.js"></script>
+<script src="urls.js"></script>
+<script src="shim2.js"></script>
+<script src="formats.js"></script>
+<script src="shim3.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>

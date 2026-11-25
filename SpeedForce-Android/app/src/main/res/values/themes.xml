@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Colors are set again at run time (Light / Dark / System setting) -->
+    <style name="Theme.VideoGrab" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF1B1C22</item>
+        <item name="android:navigationBarColor">#FF1B1C22</item>
+        <item name="android:windowBackground">#FF1B1C22</item>
+    </style>
+</resources>

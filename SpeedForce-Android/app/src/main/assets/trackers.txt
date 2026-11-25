@@ -1,0 +1,49 @@
+# Trackers, crypto-miners and abusive push-notification networks.
+# These are ALWAYS blocked (unless ad handling is Off). Blocking them is invisible to sites.
+google-analytics.com
+googletagmanager.com
+analytics.google.com
+scorecardresearch.com
+quantserve.com
+moatads.com
+hotjar.com
+mouseflow.com
+clarity.ms
+mc.yandex.ru
+analytics.yahoo.com
+pixel.facebook.com
+an.facebook.com
+whos.amung.us
+bat.bing.com
+crazyegg.com
+luckyorange.com
+inspectlet.com
+smartlook.com
+fullstory.com
+mixpanel.com
+segment.io
+quantcount.com
+statcounter.com
+histats.com
+mgid.com
+# crypto-miners (use your phone's CPU to mine money for others)
+coinhive.com
+coin-hive.com
+authedmine.com
+crypto-loot.com
+cryptoloot.pro
+webminepool.com
+minero.cc
+coinimp.com
+jsecoin.com
+monerominer.rocks
+# push-notification spam networks
+pushame.com
+pushwhy.com
+push-notification.tools
+richpush.co
+evadav.com
+roller-ads.com
+# domain-hopping ad loaders seen on video sites (also caught by address shape)
+vitting.org
+ethnicexpressions.org

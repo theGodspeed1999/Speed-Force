@@ -1,0 +1,3 @@
+! VideoGrab's own rules: ad servers the public lists miss. Same format as EasyList.
+||rtb-*.mylust.com^
+/bid?spot_id[]=
