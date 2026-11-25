@@ -301,6 +301,64 @@
     }
   } catch (e) {}
 
+  // --- YouTube: its video ads come from the same servers as the video, so host lists cannot stop them ---
+  if (CFG.mode !== 'OFF' && /(^|\.)(youtube\.com|youtube-nocookie\.com)$/.test(location.hostname)) {
+    try {
+      // 1. take the ad schedule out of what the player is told, before it reads it
+      var YT_AD_KEYS = ['adPlacements', 'adSlots', 'playerAds', 'adBreakHeartbeatParams'];
+      var ytClean = function (o) {
+        if (o && typeof o === 'object') {
+          YT_AD_KEYS.forEach(function (k) {
+            if (o[k] !== undefined) delete o[k];
+            if (o.playerResponse && o.playerResponse[k] !== undefined) delete o.playerResponse[k];
+          });
+        }
+        return o;
+      };
+      var ytParse = JSON.parse;
+      JSON.parse = function () { return ytClean(ytParse.apply(this, arguments)); };
+      var ytJson = window.Response && Response.prototype.json;
+      if (ytJson) Response.prototype.json = function () { return ytJson.apply(this, arguments).then(ytClean); };
+      var ytFirst;  // the first video's data is written straight into the page
+      Object.defineProperty(window, 'ytInitialPlayerResponse', {
+        configurable: true,
+        get: function () { return ytFirst; },
+        set: function (v) { ytFirst = ytClean(v); }
+      });
+    } catch (e) {}
+    // 2. an ad that still starts is muted, run to its end and skipped
+    var ytMuted = null;
+    setInterval(function () {
+      var p = document.querySelector('.html5-video-player');
+      var v = p && p.querySelector('video');
+      if (!v) return;
+      if (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting')) {
+        if (ytMuted === null) ytMuted = v.muted;
+        v.muted = true;
+        if (isFinite(v.duration) && v.duration > 0 && v.currentTime < v.duration - 0.3) v.currentTime = v.duration - 0.1;
+        var b = p.querySelector('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern');
+        if (b) b.click();
+      } else if (ytMuted !== null) {
+        v.muted = ytMuted;
+        ytMuted = null;
+      }
+    }, 300);
+    // 3. promoted boxes in the feed, search results and beside the video
+    var ytCss = function () {
+      var root = document.head || document.documentElement;
+      if (!root) return setTimeout(ytCss, 50);
+      var st = document.createElement('style');
+      st.textContent = ['ytd-ad-slot-renderer', 'ytd-rich-item-renderer:has(ytd-ad-slot-renderer)', 'ytd-in-feed-ad-layout-renderer',
+        'ytd-promoted-sparkles-web-renderer', 'ytd-promoted-video-renderer', 'ytd-search-pyv-renderer', 'ytd-display-ad-renderer',
+        'ytd-companion-slot-renderer', 'ytd-action-companion-ad-renderer', 'ytd-banner-promo-renderer', '#masthead-ad', '#player-ads',
+        'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]', '.ytp-ad-overlay-container',
+        '.ytp-featured-product', 'ytm-promoted-sparkles-web-renderer', 'ytm-companion-ad-renderer', 'ytm-promoted-video-renderer',
+        'ad-slot-renderer'].map(function (s) { return s + '{display:none!important}'; }).join('');
+      root.appendChild(st);
+    };
+    ytCss();
+  }
+
   // --- ad hiding ---
   var AD_SELECTORS = [
     'ins.adsbygoogle', '[id^="div-gpt-ad"]', '[id^="google_ads_"]', '[data-ad-slot]',

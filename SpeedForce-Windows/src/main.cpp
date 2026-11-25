@@ -302,6 +302,9 @@ static string classify(const string& url) {
   string h = hostOf(url);
   if (h.empty()) return "";
   if (g_trackerHosts.blocks(h) || isRotatingAdLoader(url)) return "TRACKER";
+  // standard ad script names, whatever site serves them
+  string p = url.substr(0, url.find_first_of("?#"));
+  if (endsWith(p, "/pagead.js") || endsWith(p, "/widget/ads.js")) return "AD";
   return g_adHosts.blocks(h) ? "AD" : "";
 }
 static void bumpStats(int bytes) {
@@ -953,7 +956,12 @@ static void wireTab(Tab* t) {
       bumpStats(ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_SCRIPT ? 30000 : ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE ? 60000 : ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA ? 400000 : 6000);
       t->blocked++;
       Com<ICoreWebView2WebResourceResponse> rs;
-      g_env->CreateWebResourceResponse(nullptr, ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT ? 403 : 204, L"Blocked", L"", rs.put());
+      // A script's own request (fetch, XHR, ping) must fail, not "succeed" with nothing: it is sent on to an
+      // address that cannot exist, so the page gets a real network error and nothing leaves the PC.
+      // Pictures, scripts and frames still get a quiet empty answer.
+      bool fail = ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH || ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST || ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_PING;
+      g_env->CreateWebResourceResponse(nullptr, ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT ? 403 : fail ? 307 : 204, fail ? L"Temporary Redirect" : L"Blocked",
+                                       fail ? L"Location: https://0.0.0.0:1/\r\nAccess-Control-Allow-Origin: *" : L"", rs.put());
       a->put_Response(rs.p);
       pushState();
       return S_OK;
@@ -1923,7 +1931,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     GetEnvironmentVariableW(L"SF_URL", urls, 2000);
     for (auto& u : split(U8(urls), ',')) if (!u.empty()) g_testUrls.push_back(u);
     SetWindowPos(g_hwnd, nullptr, -4000, 0, 1280, 840, SWP_NOZORDER | SWP_NOACTIVATE);
-    SetTimer(g_hwnd, 4, 1000, nullptr);
+    wchar_t tick[16] = {};  // SF_TICK: milliseconds per test step, for pages that need longer
+    GetEnvironmentVariableW(L"SF_TICK", tick, 16);
+    SetTimer(g_hwnd, 4, tick[0] ? _wtoi(tick) : 1000, nullptr);
   }
 
 #endif
