@@ -53,6 +53,9 @@ interface TabListener {
     fun onVideoTapped(tab: BrowserTab, frameUrl: String, src: String, title: String, durationSec: Int, p: Int)
     /** A popup was caught. [url] may be null when it isn't known; [toBillboard] = it opened on the Ads screen. */
     fun onPopup(tab: BrowserTab, url: String?, toBillboard: Boolean)
+    /** A tab for a popup the user's tap opened; it is not on screen until [showPopupTab]. */
+    fun newPopupTab(): BrowserTab
+    fun showPopupTab(tab: BrowserTab)
     fun openInNewTab(url: String)
     fun onFileDownload(tab: BrowserTab, url: String, mimeType: String?)
     fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
@@ -331,6 +334,7 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
     private inner class Client : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val u = request.url.toString()
+            if (request.isForMainFrame && popupRefused(u)) return true
             val scheme = request.url.scheme?.lowercase() ?: ""
             // Block app-store / intent:// jumps and other non-web links that ads use
             if (scheme != "http" && scheme != "https" && scheme != "about" && scheme != "data" && scheme != "blob") return true
@@ -405,6 +409,7 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         }
 
         override fun onPageStarted(view: WebView, pageUrl: String, favicon: Bitmap?) {
+            if (popupRefused(pageUrl)) { view.stopLoading(); return }
             pageFinishedAt = 0L
             dialogsMuted = false
             dialogTimes.clear()
@@ -532,31 +537,21 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
             val transport = resultMsg.obj as WebView.WebViewTransport
             lastPopupAt = System.currentTimeMillis()
-            when (AdFilter.mode) {
-                AdMode.HIDE -> {
-                    // Let the popup really open — just somewhere you don't have to look at it
-                    transport.webView = AdBillboard.newWindowTarget(context, currentUrl) { u ->
-                        if (isUserGesture && !AdFilter.isAd(u)) main.post { listener.onPopup(this@BrowserTab, u, true) }
-                    }
-                    resultMsg.sendToTarget()
-                    if (!isUserGesture) listener.onPopup(this@BrowserTab, null, true)
-                    return true
-                }
-                AdMode.BLOCK, AdMode.OFF -> {
-                    if (!isUserGesture) {
-                        listener.onPopup(this@BrowserTab, null, false)
-                        return false
-                    }
-                    // Catch where the popup wanted to go, then decide
-                    val off = AdFilter.mode == AdMode.OFF
-                    transport.webView = urlCatcher(view.context) { u ->
-                        if (off) listener.openInNewTab(u)
-                        else if (!AdFilter.isAd(u)) listener.onPopup(this@BrowserTab, u, false)
-                    }
-                    resultMsg.sendToTarget()
-                    return true
-                }
+            if (isUserGesture) {
+                transport.webView = popupTarget(view)
+                resultMsg.sendToTarget()
+                return true
             }
+            // From here on: popups nobody asked for (no tap)
+            if (AdFilter.mode == AdMode.HIDE) {
+                // Let the popup really open — just somewhere you don't have to look at it
+                transport.webView = AdBillboard.newWindowTarget(context, currentUrl) { }
+                resultMsg.sendToTarget()
+                listener.onPopup(this@BrowserTab, null, true)
+                return true
+            }
+            listener.onPopup(this@BrowserTab, null, false)
+            return false
         }
 
         override fun onShowCustomView(view: View, callback: CustomViewCallback) {
@@ -612,28 +607,44 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         }
     }
 
-    /** Throw-away WebView that only finds out where a popup wanted to go. */
-    private fun urlCatcher(ctx: Context, onUrl: (String) -> Unit): WebView {
-        val temp = WebView(ctx)
-        var reported = false
-        fun report(u: String) {
-            if (reported) return
-            reported = true
-            if (UrlUtils.isHttp(u)) main.post { onUrl(u) }
-            main.post { temp.stopLoading(); temp.destroy() }
-        }
-        temp.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                report(r.url.toString()); return true
-            }
+    /** Set on a popup tab until its first web address is known: answers "may it be shown?". */
+    private var popupGate: ((String) -> Boolean)? = null
 
-            override fun onRenderProcessGone(v: WebView, d: RenderProcessGoneDetail) = true
+    /** True when this load must be dropped (an unwanted popup). */
+    private fun popupRefused(u: String): Boolean {
+        val gate = popupGate ?: return false
+        if (!UrlUtils.isHttp(u)) return false
+        popupGate = null
+        return !gate(u)
+    }
 
-            override fun onPageStarted(v: WebView, u: String, favicon: Bitmap?) {
-                if (u != "about:blank") report(u)
+    /**
+     * The window for a popup opened by a tap. Many sites open the very thing you asked for this way (a chat
+     * room, a player, a login) and then move the old tab on. It becomes a real tab when it stays on the same
+     * site, or is the link that was tapped. Anything else is treated as a popup ad, as before.
+     */
+    private fun popupTarget(view: WebView): WebView {
+        val opener = currentUrl
+        val hit = view.hitTestResult
+        val tappedLink = hit.extra?.takeIf { hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE }
+        val child = listener.newPopupTab()
+        child.popupGate = { u ->
+            val tapped = tappedLink != null && UrlUtils.dedupeKey(u) == UrlUtils.dedupeKey(tappedLink)
+            val wanted = AdFilter.mode == AdMode.OFF || (!AdFilter.isAd(u) && (UrlUtils.sameSite(u, opener) || tapped))
+            main.post {
+                if (wanted) listener.showPopupTab(child)
+                else {
+                    child.destroy()
+                    val hide = AdFilter.mode == AdMode.HIDE
+                    if (hide) AdBillboard.redirect(context, u, opener)
+                    listener.onPopup(this, u.takeIf { !AdFilter.isAd(it) }, hide)
+                }
             }
+            wanted
         }
-        return temp
+        // a popup that never goes anywhere is thrown away
+        main.postDelayed({ if (child.popupGate != null) { child.popupGate = null; child.destroy() } }, 15_000)
+        return child.webView
     }
 
     /** Stops hiding ads on this page (until it is reloaded), so the user can see an ad and close it. */

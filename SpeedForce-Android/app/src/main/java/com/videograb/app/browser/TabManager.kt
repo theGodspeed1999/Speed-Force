@@ -14,6 +14,15 @@ class TabManager(private val context: Context, private val listener: TabListener
 
     val current: BrowserTab get() = tabs[currentIndex.coerceIn(0, tabs.size - 1)]
 
+    /** A tab for a popup: made now, put on screen by [show] only if it turns out to be wanted. */
+    fun popupTab(): BrowserTab = BrowserTab(nextId++, context, listener)
+
+    fun show(tab: BrowserTab) {
+        if (tabs.isNotEmpty()) { current.capture(); current.pause() }
+        tabs.add(tab)
+        currentIndex = tabs.size - 1
+    }
+
     fun newTab(url: String): BrowserTab {
         val tab = BrowserTab(nextId++, context, listener)
         if (tabs.isNotEmpty()) { current.capture(); current.pause() }

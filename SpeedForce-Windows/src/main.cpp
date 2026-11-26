@@ -14,6 +14,8 @@
 
 #define APP_NAME L"Speed Force"
 static const char* kStartUrl = "https://sf.start/";
+// The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
+static const char* kLensUrl = "https://lens.google.com/speedforce/";
 static const UINT WM_POSTED = WM_APP + 1;
 static const UINT WM_SHOWME = WM_APP + 2;
 
@@ -69,6 +71,7 @@ struct Tab {
   Com<ICoreWebView2> wv;
   string url, title = "New tab", favicon, pending;
   wstring fpScript;  // id of the fingerprint-protection script in this tab
+  bool lens = false; // used for image search: those pages are not kept
   bool loading = false, ready = false, suspended = false, closing = false;
   int videoCount = 0, blocked = 0, hidden = 0;
   std::map<string, int> frameVideos;
@@ -198,6 +201,11 @@ static bool shieldsDown(const Tab* t) {
 static string modeFor(const Tab* t) { return shieldsDown(t) ? "OFF" : mode(); }
 
 static json readList(const wchar_t* name) { return readJson(g_data + L"\\" + name, json::array()); }
+/** The image search page, or the Google results it led to: never written to history, saved tabs or "reopen". */
+static bool isLensPage(bool lensTab, const string& url) {
+  string h = hostOf(url);
+  return startsWith(url, kLensUrl) || (lensTab && (h == "lens.google.com" || h == "www.google.com" || h == "google.com"));
+}
 static void addHistory(const string& title, const string& url) {
   if (g_settings.value("private", false) || !isHttp(url) || isStart(url)) return;
   json list = readList(L"history.json"), out = json::array();
@@ -482,6 +490,16 @@ static void applyFingerprint(Tab* t) {
   }
 }
 
+/** Removes what the web engine itself noted about image searches: cached pages and its own history list. */
+static void forgetLensTraces() {
+  if (!g_ui_wv) return;
+  if (auto w13 = g_ui_wv.as<ICoreWebView2_13>(IID_ICoreWebView2_13)) {
+    Com<ICoreWebView2Profile> pr;
+    w13->get_Profile(pr.put());
+    if (auto p2 = pr.as<ICoreWebView2Profile2>(IID_ICoreWebView2Profile2))
+      p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY), nullptr);
+  }
+}
 static void closeTab(Tab* t) {
   if (isHttp(t->url) && inList("forgetSites", hostOf(t->url))) {  // "Forget me when I close this site"
     bool other = false;
@@ -494,7 +512,8 @@ static void closeTab(Tab* t) {
   size_t i = 0;
   for (; i < g_tabs.size(); i++) if (g_tabs[i].get() == t) break;
   if (i == g_tabs.size()) return;
-  if (isHttp(t->url)) g_closed.push_back(t->url);
+  if (isHttp(t->url) && !isLensPage(t->lens, t->url)) g_closed.push_back(t->url);
+  if (t->lens) forgetLensTraces();
   t->closing = true;
   if (t->ctl) t->ctl->Close();
   bool wasCur = g_cur == t;
@@ -998,13 +1017,15 @@ static void wireTab(Tab* t) {
     rq->get_Uri(uri.put());
     string u = U8(uri.w);
     if (!isHttp(u)) return S_OK;
-    if (hostOf(u) == "sf.start") {  // our own start page: answered here from the assets folder (no network, never filtered)
+    bool lensPage = startsWith(u, kLensUrl);
+    if (hostOf(u) == "sf.start" || lensPage) {  // our own pages: answered here from the assets folder (no network, never filtered)
       string path = u.substr(u.find("://") + 3);
       path = path.substr(path.find('/') == string::npos ? path.size() : path.find('/') + 1);
       path = path.substr(0, path.find_first_of("?#"));
+      if (lensPage) path = u.substr(strlen(kLensUrl), u.find_first_of("?#") == string::npos ? string::npos : u.find_first_of("?#") - strlen(kLensUrl));
       if (path.empty()) path = "index.html";
-      const char* type = path == "index.html" ? "text/html; charset=utf-8" : path == "start.js" ? "application/javascript" : path == "logo.png" ? "image/png" : nullptr;
-      string body = type ? readFile(g_assets + L"\\start\\" + W(path)) : "";
+      const char* type = path == "index.html" ? "text/html; charset=utf-8" : path == "start.js" || path == "lens.js" ? "application/javascript" : path == "logo.png" ? "image/png" : nullptr;
+      string body = type ? readFile(g_assets + (lensPage ? L"\\lens\\" : L"\\start\\") + W(path)) : "";
       IStream* ms = SHCreateMemStream((const BYTE*)body.data(), (UINT)body.size());
       Com<ICoreWebView2WebResourceResponse> rs;
       wstring hdr = L"Content-Type: " + W(type ? type : "text/plain") + L"\r\nCache-Control: no-store";
@@ -1060,6 +1081,7 @@ static void wireTab(Tab* t) {
       t->wv->get_Settings(st.put());
       st->put_IsScriptEnabled(!inList("scriptsOff", hostOf(u)));
     }
+    if (startsWith(u, kLensUrl)) { t->lens = true; if (!g_settings.value("lensDirty", false)) { g_settings["lensDirty"] = true; saveSettings(); } }
     if (isStart(u)) return S_OK;
     BOOL user = FALSE, redirected = FALSE;
     a->get_IsUserInitiated(&user);
@@ -1076,7 +1098,7 @@ static void wireTab(Tab* t) {
       return S_OK;
     }
     ULONGLONG now = nowMs();
-    if (mode() != "OFF" && isHttp(t->url) && !user && !redirected && !sameSite(u, t->url) && !isStart(t->url)) {
+    if (mode() != "OFF" && isHttp(t->url) && !user && !redirected && !sameSite(u, t->url) && !isStart(t->url) && !startsWith(t->url, kLensUrl)) {
       bool afterBack = now - t->lastBack < 3000;
       bool whileReading = t->finished && now - t->finished > 3000;
       bool tabUnder = now - t->lastPopup < 2000;
@@ -1116,7 +1138,7 @@ static void wireTab(Tab* t) {
     } else {
       CoStr title; w->get_DocumentTitle(title.put());
       t->title = title.w && *title.w ? title.str() : t->url;
-      addHistory(t->title, t->url);
+      if (!isLensPage(t->lens, t->url)) addHistory(t->title, t->url);
     }
     pushState();
     return S_OK;
@@ -1485,6 +1507,7 @@ static void menuAction(int cmd) {
       break;
     case 122: if (t && t->wv) t->wv->OpenDevToolsWindow(); break;
     case 123: launchSelf(L"--window"); break;
+    case 127: newTab(kLensUrl); break;
     case 124: launchSelf(L"--private"); break;
     case 126:
       g_settings["savePasswords"] = !g_settings.value("savePasswords", false);
@@ -1596,6 +1619,7 @@ static void handleUi(const json& m) {
   }
   else if (c == "popup") { json x = A(1); showPopup(A(0).get<string>(), x.value("l", 0.0), x.value("r", 0.0), x.value("b", 0.0)); ret(); }
   else if (c == "popupData") ret(popupData());
+  else if (c == "lens") { newTab(kLensUrl); ret(); }
   else if (c == "popupSize") { sizePopup(A(0).get<double>(), A(1).get<double>(), A(2).is_boolean() && A(2).get<bool>()); ret(); }
   else if (c == "popupClose") { hidePopup(); if (t && t->ctl) t->ctl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC); ret(); }
   else if (c == "popupSwitch") { g_popKind = A(0).get<string>(); g_popOpen = false; if (g_popCtl) g_popCtl->put_IsVisible(FALSE); g_popR = g_popL + 360; sendPopup(); ret(); }
@@ -1777,7 +1801,7 @@ static void saveTabsNow() {
   int cur = 0;
   for (auto& t : g_tabs) {
     string url = !t->pending.empty() ? t->pending : t->url;
-    if (isHttp(url) && !isStart(url) && u.size() < 50) { if (t.get() == g_cur) cur = (int)u.size(); u.push_back(url); }
+    if (isHttp(url) && !isStart(url) && !isLensPage(t->lens, url) && u.size() < 50) { if (t.get() == g_cur) cur = (int)u.size(); u.push_back(url); }
   }
   writeFile(g_data + L"\\tabs.json", json({{"u", u}, {"i", cur}}).dump());
   writeFile(g_data + L"\\stats.json", g_stats.dump());
@@ -1844,6 +1868,7 @@ static void testTick() {
   wchar_t extra[1200] = {};
   if (step == last - 11 && GetEnvironmentVariableW(L"SF_HOME", extra, 1200)) { json hm = {{"cmd", "home"}, {"args", json::array()}}; handleUi(hm); }
   if (step == last - 8 && GetEnvironmentVariableW(L"SF_HOME", extra, 1200)) snap(L"7-home");
+  if (step == 14 && GetEnvironmentVariableW(L"SF_JS", extra, 1200) && g_cur && g_cur->wv) g_cur->wv->ExecuteScript(extra, nullptr);
   if (step == last - 6 && GetEnvironmentVariableW(L"SF_PICK", extra, 1200)) sendUi("pick-request", {{"pageUrl", U8(extra)}, {"frameUrl", ""}, {"directUrl", ""}, {"title", "test"}, {"streams", json::array()}});
   if (step == last - 2 && GetEnvironmentVariableW(L"SF_PICK", extra, 1200)) snap(L"5-picker");
   if (step == last - 1 && GetEnvironmentVariableW(L"SF_DLURL", extra, 1200) && g_cur && g_cur->wv) { g_cur->lastGesture = nowMs(); g_cur->wv->Navigate(extra); }
@@ -1890,7 +1915,7 @@ static void createUi() {
     })), &tk);
     g_ui_wv->add_NavigationCompleted(H2(ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*, ([](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
       static bool first = true;
-      if (first) { first = false; g_uiReady = true; createPopup([] { for (auto& h : g_settings.value("forgetPending", json::array())) siteCookies("https://" + h.get<string>() + "/", true, [](int) {}); g_settings["forgetPending"] = json::array(); startBrowsing(g_argUrl); layout(); }); }
+      if (first) { first = false; g_uiReady = true; createPopup([] { for (auto& h : g_settings.value("forgetPending", json::array())) siteCookies("https://" + h.get<string>() + "/", true, [](int) {}); g_settings["forgetPending"] = json::array(); if (g_settings.value("lensDirty", false)) { forgetLensTraces(); g_settings["lensDirty"] = false; saveSettings(); } startBrowsing(g_argUrl); layout(); }); }
       return S_OK;
     })), &tk);
     c->add_AcceleratorKeyPressed(H2(ICoreWebView2AcceleratorKeyPressedEventHandler, ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs*, ([](ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs* a) -> HRESULT {

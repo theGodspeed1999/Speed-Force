@@ -42,6 +42,7 @@ runtime, which most Windows 10 and 11 PCs already have.
 ### Windows
 - A single-window design with no extra title bar.
 - **Menu, site information and Shields panels** with per-site script blocking, fingerprint protection and "forget me when I close this site".
+- **Search by image:** drag, paste or browse for a picture and search it with Google Lens.
 - **New window** and **new private window**.
 - **Extensions:** load an unpacked extension from a folder.
 - **Passwords and autofill**, off until you turn it on.

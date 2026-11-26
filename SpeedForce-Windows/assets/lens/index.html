@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Search by image</title>
+<style>
+  :root { color-scheme: light dark; --bg: #1b1c22; --card: #2b2d37; --line: #4a4c5a; --text: #ededf1; --dim: #a8aab8; --accent: #ff7654; }
+  @media (prefers-color-scheme: light) { :root { --bg: #f6f6f9; --card: #fff; --line: #cfd0da; --text: #1b1c22; --dim: #5d5f6e; --accent: #d9411a; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  main { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; text-align: center; }
+  h1 { font-size: 24px; margin: 0 0 18px; }
+  #zone { width: min(620px, 100%); border: 2px dashed var(--line); border-radius: 18px; background: var(--card); padding: 46px 24px; box-sizing: border-box; }
+  #zone.over { border-color: var(--accent); }
+  #zone p { margin: 0 0 16px; }
+  button { font: inherit; font-weight: 600; cursor: pointer; border-radius: 22px; border: 1px solid var(--accent); background: none; color: var(--text); padding: 9px 30px; }
+  button:hover { background: var(--accent); color: #fff; }
+  #msg { min-height: 22px; margin-top: 16px; color: var(--accent); }
+  small { display: block; max-width: 620px; margin-top: 10px; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Search by image</h1>
+  <div id="zone">
+    <p><b>Drag a picture here</b>, or press <b>Ctrl+V</b> to paste one</p>
+    <button id="browse" type="button">Browse…</button>
+    <input id="pick" type="file" accept="image/*" hidden>
+  </div>
+  <div id="msg" role="status"></div>
+  <small>Searched with Google Lens: the picture is sent to Google. Speed Force does not save it, and does not keep this search in its history.</small>
+  <form id="send" method="POST" enctype="multipart/form-data"><input id="out" type="file" name="encoded_image" hidden></form>
+</main>
+<script src="lens.js"></script>
+</body>
+</html>

@@ -313,6 +313,13 @@ class MainActivity : ComponentActivity(), TabListener {
         }
     }
 
+    override fun newPopupTab(): BrowserTab = tabs.popupTab()
+
+    override fun showPopupTab(tab: BrowserTab) {
+        screen = 0
+        tabs.show(tab)
+    }
+
     override fun openInNewTab(url: String) {
         tabs.newTab(url)
     }

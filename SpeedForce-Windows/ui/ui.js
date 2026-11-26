@@ -126,6 +126,7 @@ $('btn-star').onclick = () => cmd('toggleBookmark');
 const dropDown = (kind, id) => () => { const r = $(id).getBoundingClientRect(); cmd('popup', kind, { l: r.left, r: r.right, b: r.bottom }); };
 $('btn-shield').onclick = dropDown('shields', 'btn-shield');
 $('btn-site').onclick = dropDown('site', 'btn-site');
+$('btn-lens').onclick = () => cmd('lens');
 $('btn-downloads').onclick = () => (panel === 'downloads' ? closePanel() : openPanel('downloads'));
 $('btn-menu').onclick = dropDown('menu', 'btn-menu');
 $('zoom').onclick = () => cmd('zoom', 0);

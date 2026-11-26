@@ -119,6 +119,7 @@ function menuView() {
     into('history', 'History', 'history'),
     into('book', 'Bookmarks and lists', 'bookmarks'),
     item('download', 'Downloads', act(108), { key: 'Ctrl+J' }),
+    item('find', 'Search by image (Lens)', act(127)),
     into('puzzle', 'Extensions', 'extensions'),
     item('trash', 'Delete browsing data…', act(116), { key: 'Ctrl+Shift+Del' }),
     h('hr'),

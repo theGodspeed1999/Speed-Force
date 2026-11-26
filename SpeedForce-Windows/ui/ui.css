@@ -125,4 +125,5 @@ input:focus, select:focus { border-color: var(--accent); }
 /* menu button: top right corner of the window */
 #btn-site { min-width: 30px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: var(--dim); }
 #bar > #btn-shield { margin-right: 4px; }
+#btn-lens { height: 28px; min-width: 30px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: var(--dim); }
 #btn-menu { display: flex; align-items: center; justify-content: center; }
