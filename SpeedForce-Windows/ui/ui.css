@@ -123,4 +123,6 @@ input:focus, select:focus { border-color: var(--accent); }
 .sw.on { background: var(--accent); } .sw.on i { left: 21px; }
 
 /* menu button: top right corner of the window */
-#btn-menu { -webkit-app-region: no-drag; app-region: no-drag; align-self: center; font-size: 18px; min-width: 34px; height: 34px; margin: 2px 2px 0 4px; }
+#btn-site { min-width: 30px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: var(--dim); }
+#bar > #btn-shield { margin-right: 4px; }
+#btn-menu { display: flex; align-items: center; justify-content: center; }

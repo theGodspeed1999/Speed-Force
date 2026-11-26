@@ -189,9 +189,9 @@ fun BrowserScreen(activity: MainActivity) {
                         if (tab.progress < 100) Icon(Icons.Filled.Close, "Stop") else Icon(Icons.Filled.Refresh, "Refresh")
                     }
                 } else {
-                    // Empty address bar: scan with the camera (Google Lens)
+                    // Empty address bar: search a photo or screenshot with Google Lens
                     Surface(
-                        Modifier.padding(end = 6.dp).clickable { activity.scanWithCamera() },
+                        Modifier.padding(end = 6.dp).clickable { activity.pickPhotoForSearch() },
                         shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                     ) { Text("Lens", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) }
                 }
@@ -320,9 +320,9 @@ fun BrowserScreen(activity: MainActivity) {
                     Icons.Filled.Home, "Desktop site", { tab.setDesktopSite(!tab.desktop); showMenu = false },
                     trailing = { androidx.compose.material3.Switch(tab.desktop, { tab.setDesktopSite(it); showMenu = false }) },
                 )
-                MenuRow(Icons.Filled.Search, "Scan with camera (Google Lens)", { showMenu = false; activity.scanWithCamera() },
-                    hint = "Point at anything: results open in a tab")
-                MenuRow(Icons.Filled.Search, "Search a photo (Google Lens)", { showMenu = false; activity.pickPhotoForSearch() })
+                MenuRow(Icons.Filled.Search, "Google Lens: photo or screenshot", { showMenu = false; activity.pickPhotoForSearch() },
+                    hint = "Pick one from your phone: results open in a tab")
+                MenuRow(Icons.Filled.Search, "Google Lens: use the camera", { showMenu = false; activity.scanWithCamera() })
                 MenuRow(Icons.Filled.Search, "Find videos on this page", { showMenu = false; activity.openPickerForCurrentPage() })
                 MenuRow(Icons.Filled.Notifications, "Shields log", { showMenu = false; activity.openScreen(2) },
                     hint = if (activity.blockedCount > 0) "Popups caught: ${activity.blockedCount}" else null)

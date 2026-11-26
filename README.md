@@ -35,12 +35,13 @@ runtime, which most Windows 10 and 11 PCs already have.
 - A clean start page with no news and no sponsored tiles.
 
 ### Android
-- **Search with Google Lens:** scan with the camera or pick a photo, then tap a result to open it.
+- **Search with Google Lens:** pick a photo or screenshot, share one from another app, or use the camera.
 - **Secure DNS** for private address lookups.
 - Tab previews, and a desktop-site switch.
 
 ### Windows
 - A single-window design with no extra title bar.
+- **Menu, site information and Shields panels** with per-site script blocking, fingerprint protection and "forget me when I close this site".
 - **New window** and **new private window**.
 - **Extensions:** load an unpacked extension from a folder.
 - **Passwords and autofill**, off until you turn it on.

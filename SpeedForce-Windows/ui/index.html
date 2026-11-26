@@ -10,7 +10,6 @@
 <div id="top">
   <div id="strip">
     <div id="tabs"></div>
-    <button id="btn-menu" title="Menu">&#x22EE;</button>
     <div id="lights">
       <button id="w-min" class="light yellow" title="Minimise"><i>&#x2212;</i></button>
       <button id="w-max" class="light green" title="Maximise / restore (F11 = full screen)"><i>&#x25A1;</i></button>
@@ -23,17 +22,21 @@
     <button id="reload" title="Reload (F5)">&#x27F3;</button>
     <button id="home" title="Home">&#x2302;</button>
     <div id="addr-wrap">
-      <button id="btn-shield" class="shield" title="Shields">
-        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" fill="currentColor"/></svg>
-        <b class="badge" hidden></b>
+      <button id="btn-site" title="Site information">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/></svg>
       </button>
       <span id="insecure" title="Not secure: this page uses http://" hidden>&#x26A0;</span>
       <input id="addr" spellcheck="false" placeholder="Search or type a web address">
       <span id="zoom" hidden></span>
       <button id="btn-star" class="star" title="Bookmark this page">&#x2606;</button>
     </div>
+    <button id="btn-shield" class="shield" title="Shields">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" fill="currentColor"/></svg>
+      <b class="badge" hidden></b>
+    </button>
     <button id="videos" class="pill" title="Find videos on this page">&#x2B07; Download</button>
     <button id="btn-downloads" title="Downloads (Ctrl+J)">&#x2B73;<b class="badge" hidden></b></button>
+    <button id="btn-menu" title="Menu"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
   <div id="engines" class="row" hidden></div>
   <div id="find" class="row" hidden>

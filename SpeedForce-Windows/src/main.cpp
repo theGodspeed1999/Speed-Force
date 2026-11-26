@@ -68,6 +68,7 @@ struct Tab {
   Com<ICoreWebView2Controller> ctl;
   Com<ICoreWebView2> wv;
   string url, title = "New tab", favicon, pending;
+  wstring fpScript;  // id of the fingerprint-protection script in this tab
   bool loading = false, ready = false, suspended = false, closing = false;
   int videoCount = 0, blocked = 0, hidden = 0;
   std::map<string, int> frameVideos;
@@ -212,10 +213,20 @@ static void sendUi(const char* channel, const json& data) {
   json m = {{"ch", channel}, {"data", data}};
   g_ui_wv->PostWebMessageAsJson(W(m.dump()).c_str());
 }
+// the drop-down window (menu, site information, Shields) is its own small web view above the page
+static Com<ICoreWebView2Controller> g_popCtl;
+static Com<ICoreWebView2> g_popWv;
+static HWND g_popHwnd = nullptr;
+static string g_popKind, g_popHiddenKind;
+static double g_popL = 0, g_popR = 0, g_popB = 0;  // the button it hangs from, in toolbar CSS pixels
+static bool g_popOpen = false;
+static ULONGLONG g_popHiddenAt = 0;
+static void hidePopup();
 static void replyUi(int id, const json& result) {
-  if (!g_ui_wv) return;
+  ICoreWebView2* to = id >= 1000000 ? g_popWv.p : g_ui_wv.p;
+  if (!to) return;
   json m = {{"id", id}, {"result", result}};
-  g_ui_wv->PostWebMessageAsJson(W(m.dump()).c_str());
+  to->PostWebMessageAsJson(W(m.dump()).c_str());
 }
 static void notice(const string& text, json action = nullptr) { sendUi("notice", {{"text", text}, {"action", action}}); }
 
@@ -409,6 +420,7 @@ static void suspendTab(Tab* t) {
 }
 
 static void selectTab(Tab* t) {
+  hidePopup();
   Tab* prev = g_cur;
   g_cur = t;
   if (prev && prev != t) { prev->hiddenSince = nowMs(); if (prev->ctl) prev->ctl->put_IsVisible(FALSE); }
@@ -424,7 +436,61 @@ static void selectTab(Tab* t) {
   sendUi("find-result", nullptr);
 }
 
+static bool inList(const char* key, const string& host) {
+  for (auto& x : g_settings.value(key, json::array())) if (x.get<string>() == host) return true;
+  return false;
+}
+static Com<ICoreWebView2CookieManager> cookieManager() {
+  Com<ICoreWebView2CookieManager> cm;
+  if (g_ui_wv) if (auto w2 = g_ui_wv.as<ICoreWebView2_2>(IID_ICoreWebView2_2)) w2->get_CookieManager(cm.put());
+  return cm;
+}
+/** Counts the cookies saved for a page, or deletes them; answers with how many are left. */
+static void siteCookies(const string& url, bool remove, std::function<void(int)> done) {
+  auto cm = cookieManager();
+  if (!cm || !isHttp(url)) { done(0); return; }
+  ICoreWebView2CookieManager* raw = cm.p;
+  raw->AddRef();
+  raw->GetCookies(W(url).c_str(), H2(ICoreWebView2GetCookiesCompletedHandler, HRESULT, ICoreWebView2CookieList*, ([raw, remove, done](HRESULT, ICoreWebView2CookieList* cl) -> HRESULT {
+    UINT n = 0;
+    if (cl) cl->get_Count(&n);
+    if (remove) for (UINT i = 0; i < n; i++) { Com<ICoreWebView2Cookie> c; cl->GetValueAtIndex(i, c.put()); raw->DeleteCookie(c.p); }
+    raw->Release();
+    done(remove ? 0 : (int)n);
+    return S_OK;
+  })));
+}
+// Page scripts cannot tell one PC from another: canvas reads get tiny random changes, hardware details are generic.
+static const char* kFingerprintJs = R"JS((function(){var c=window.__vgCfg||{off:[]};try{var top=(location.ancestorOrigins&&location.ancestorOrigins.length)?new URL(location.ancestorOrigins[location.ancestorOrigins.length-1]).hostname:location.hostname;if((c.off||[]).indexOf(top.toLowerCase().replace(/^www\./,''))>=0)return}catch(e){}
+var start=4*Math.floor(Math.random()*97);
+function noise(d){for(var i=start;i<d.length;i+=388)d[i]^=1}
+try{var C=CanvasRenderingContext2D.prototype,get=C.getImageData;C.getImageData=function(){var r=get.apply(this,arguments);noise(r.data);return r};
+var H=HTMLCanvasElement.prototype;['toDataURL','toBlob'].forEach(function(n){var f=H[n];H[n]=function(){try{var x=this.getContext('2d');if(x&&this.width&&this.height){var d=get.call(x,0,0,this.width,this.height);noise(d.data);x.putImageData(d,0,0)}}catch(e){}return f.apply(this,arguments)}})}catch(e){}
+function fix(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v},configurable:true})}catch(e){}}
+fix(Navigator.prototype,'hardwareConcurrency',4);fix(Navigator.prototype,'deviceMemory',8);
+[window.WebGLRenderingContext,window.WebGL2RenderingContext].forEach(function(G){if(!G)return;var f=G.prototype.getParameter;G.prototype.getParameter=function(p){if(p===37445)return 'Google Inc.';if(p===37446)return 'ANGLE (Generic GPU)';return f.apply(this,arguments)}})})();)JS";
+static void applyFingerprint(Tab* t) {
+  if (!t->wv) return;
+  bool on = g_settings.value("antiFinger", false);
+  if (!on && !t->fpScript.empty()) { t->wv->RemoveScriptToExecuteOnDocumentCreated(t->fpScript.c_str()); t->fpScript.clear(); }
+  if (on && t->fpScript.empty()) {
+    int id = t->id;
+    t->wv->AddScriptToExecuteOnDocumentCreated(W(kFingerprintJs).c_str(), H2(ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler, HRESULT, LPCWSTR, ([id](HRESULT, LPCWSTR sid) -> HRESULT {
+      for (auto& x : g_tabs) if (x->id == id && sid) x->fpScript = sid;
+      return S_OK;
+    })));
+  }
+}
+
 static void closeTab(Tab* t) {
+  if (isHttp(t->url) && inList("forgetSites", hostOf(t->url))) {  // "Forget me when I close this site"
+    bool other = false;
+    for (auto& x : g_tabs) if (x.get() != t && hostOf(x->url) == hostOf(t->url)) other = true;
+    if (!other) {
+      if (t->wv) t->wv->ExecuteScript(L"try{localStorage.clear();sessionStorage.clear()}catch(e){}", nullptr);
+      siteCookies(t->url, true, [](int) {});
+    }
+  }
   size_t i = 0;
   for (; i < g_tabs.size(); i++) if (g_tabs[i].get() == t) break;
   if (i == g_tabs.size()) return;
@@ -920,6 +986,7 @@ static void wireTab(Tab* t) {
   })), &tk);
   // script for every page and frame
   wv->AddScriptToExecuteOnDocumentCreated(W(pageScript()).c_str(), nullptr);
+  applyFingerprint(t);
   wv->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
   // every request: ads and trackers are stopped here; video streams are noted
   wv->add_WebResourceRequested(H2(ICoreWebView2WebResourceRequestedEventHandler, ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs*, ([id](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* a) -> HRESULT {
@@ -988,6 +1055,11 @@ static void wireTab(Tab* t) {
     string l = lower(u.substr(0, 8));
     if (!(startsWith(l, "http") || startsWith(l, "about:") || startsWith(l, "data:") || startsWith(l, "blob:") || startsWith(l, "file:"))) { a->put_Cancel(TRUE); return S_OK; }
     if (!isHttp(u)) return S_OK;
+    if (t->wv) {  // "Block scripts" for this site (takes effect for the page now being opened)
+      Com<ICoreWebView2Settings> st;
+      t->wv->get_Settings(st.put());
+      st->put_IsScriptEnabled(!inList("scriptsOff", hostOf(u)));
+    }
     if (isStart(u)) return S_OK;
     BOOL user = FALSE, redirected = FALSE;
     a->get_IsUserInitiated(&user);
@@ -1272,69 +1344,106 @@ static json settingsView() {
   return s;
 }
 
-static void showMenu() {
-  HMENU m = CreatePopupMenu();
-  bool priv = g_settings.value("private", false);
-  AppendMenuW(m, MF_STRING, 101, L"New tab\tCtrl+T");
-  AppendMenuW(m, MF_STRING | (g_closed.empty() ? MF_GRAYED : 0), 102, L"Reopen closed tab\tCtrl+Shift+T");
-  AppendMenuW(m, MF_STRING, 123, L"New window\tCtrl+N");
-  AppendMenuW(m, MF_STRING, 124, L"New private window\tCtrl+Shift+N");
-  AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING, 103, L"Find videos on this page");
-  AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING, 108, L"Downloads\tCtrl+J");
-  AppendMenuW(m, MF_STRING, 109, L"History\tCtrl+H");
-  AppendMenuW(m, MF_STRING, 110, L"Bookmarks\tCtrl+D");
-  AppendMenuW(m, MF_STRING | (g_settings.value("savePasswords", false) && !g_private ? MF_CHECKED : 0) | (g_private ? MF_GRAYED : 0), 126, L"Passwords and autofill (save in this browser)");
-  HMENU xm = CreatePopupMenu();
-  AppendMenuW(xm, MF_STRING | (g_private ? MF_GRAYED : 0), 125, L"Add extension (unpacked folder)...");
-  json exts = g_settings.value("extensions", json::array());
-  for (size_t i = 0; i < exts.size() && i < 50; i++) {
-    wstring n = W(exts[i].get<string>());
-    size_t k = n.find_last_of(L"\\/");
-    AppendMenuW(xm, MF_STRING, 200 + (UINT)i, (L"Remove: " + (k == wstring::npos ? n : n.substr(k + 1))).c_str());
+static void handleUi(const json& m);
+static void hidePopup() {
+  if (!g_popCtl || !g_popOpen) return;
+  g_popOpen = false;
+  g_popHiddenKind = g_popKind;
+  g_popHiddenAt = nowMs();
+  g_popCtl->put_IsVisible(FALSE);
+}
+static json popupData() {
+  Tab* t = g_cur;
+  bool st = !t || isStart(t->url);
+  string url = st ? "" : t->url, host = st ? "" : hostOf(url);
+  json ext = json::array();
+  for (auto& x : g_settings.value("extensions", json::array())) { string n = x.get<string>(); size_t k = n.find_last_of("\\/"); ext.push_back(k == string::npos ? n : n.substr(k + 1)); }
+  return {{"kind", g_popKind}, {"theme", g_settings.value("theme", "SYSTEM")}, {"start", st}, {"host", host}, {"secure", startsWith(url, "https:")},
+          {"favicon", st ? "" : t->favicon}, {"blocked", t ? t->blocked : 0}, {"hidden", t ? t->hidden : 0}, {"shieldsDown", t && shieldsDown(t)},
+          {"adMode", mode()}, {"httpsOnly", g_settings.value("httpsOnly", true)}, {"antiFinger", g_settings.value("antiFinger", false)},
+          {"block3p", g_settings.value("block3p", false)}, {"scriptsOff", inList("scriptsOff", host)}, {"forget", inList("forgetSites", host)},
+          {"passwords", g_settings.value("savePasswords", false) && !g_private}, {"private", g_private}, {"privateMode", g_settings.value("private", false)},
+          {"closed", (int)g_closed.size()}, {"extensions", ext}, {"zoom", t ? (int)(t->zoom * 100 + 0.5) : 100}};
+}
+static void sendPopup() {
+  if (!g_popWv) return;
+  json m = {{"ch", "popup"}, {"data", popupData()}};
+  g_popWv->PostWebMessageAsJson(W(m.dump()).c_str());
+}
+static void showPopup(const string& kind, double l, double r, double btm) {
+  if (!g_popWv) return;
+  if (g_popOpen && g_popKind == kind) { hidePopup(); return; }
+  if (g_popHiddenKind == kind && nowMs() - g_popHiddenAt < 300) return;  // the click that closed it was on its own button
+  hidePopup();
+  g_popKind = kind; g_popL = l; g_popR = r; g_popB = btm;
+  RECT lay{0, 0, (int)((kind == "shields" ? 402 : kind == "menu" ? 328 : 322) * dpiScale()), (int)(600 * dpiScale())};
+  g_popCtl->put_Bounds(lay);  // still hidden: gives the page its real width to measure itself
+  sendPopup(); // the page draws itself, reports its size, and is then shown
+}
+static void sizePopup(double wCss, double hCss, bool fresh) {
+  if (!g_popCtl || (!fresh && !g_popOpen)) return;
+  RECT rc; GetClientRect(g_hwnd, &rc);
+  double k = dpiScale();
+  int e = (g_fullscreen || IsZoomed(g_hwnd)) ? 0 : (int)(kEdge * k + 0.5);
+  int w = (int)(wCss * k + 0.5), h = (int)((hCss + 1) * k + 0.5);
+  // the site panel hangs from the left of its button; menu and Shields end where their button ends
+  int x = g_popKind == "site" ? e + (int)((g_popL - 4) * k) : e + (int)((g_popR + 4) * k) - w;
+  int y = e + (int)((g_popB + 2) * k);
+  x = std::max(4, std::min<int>(x, rc.right - w - 4));
+  h = std::min<int>(h, std::max<int>(120, rc.bottom - y - 6));
+  RECT box{x, y, x + w, y + h};
+  g_popCtl->put_Bounds(box);
+  if (g_popHwnd) {
+    int round = (int)(24 * k);
+    SetWindowRgn(g_popHwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, round, round), TRUE);
+    SetWindowPos(g_popHwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   }
-  AppendMenuW(m, MF_POPUP, (UINT_PTR)xm, L"Extensions");
-  AppendMenuW(m, MF_STRING, 116, L"Delete browsing data...\tCtrl+Shift+Del");
-  AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  HMENU zm = CreatePopupMenu();
-  AppendMenuW(zm, MF_STRING, 105, L"Zoom in\tCtrl++");
-  AppendMenuW(zm, MF_STRING, 106, L"Zoom out\tCtrl+-");
-  AppendMenuW(zm, MF_STRING, 107, L"Actual size\tCtrl+0");
-  AppendMenuW(zm, MF_STRING, 117, L"Full screen\tF11");
-  AppendMenuW(m, MF_POPUP, (UINT_PTR)zm, L"Zoom");
-  AppendMenuW(m, MF_STRING, 114, L"Print...\tCtrl+P");
-  HMENU fm = CreatePopupMenu();
-  AppendMenuW(fm, MF_STRING, 104, L"Find in page\tCtrl+F");
-  AppendMenuW(fm, MF_STRING, 118, L"Cut\tCtrl+X");
-  AppendMenuW(fm, MF_STRING, 119, L"Copy\tCtrl+C");
-  AppendMenuW(fm, MF_STRING, 120, L"Paste\tCtrl+V");
-  AppendMenuW(m, MF_POPUP, (UINT_PTR)fm, L"Find and edit");
-  HMENU sm = CreatePopupMenu();
-  AppendMenuW(sm, MF_STRING, 121, L"Copy page address");
-  AppendMenuW(m, MF_POPUP, (UINT_PTR)sm, L"Save and share");
-  HMENU tm = CreatePopupMenu();
-  AppendMenuW(tm, MF_STRING, 111, L"Shields log");
-  AppendMenuW(tm, MF_STRING, 122, L"Developer tools\tF12");
-  AppendMenuW(m, MF_POPUP, (UINT_PTR)tm, L"More tools");
-  AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING | (priv ? MF_CHECKED : 0), 113, L"Private mode (no history)");
-  AppendMenuW(m, MF_STRING, 112, L"Settings");
-  AppendMenuW(m, MF_STRING, 115, L"Exit");
-  {  // dark popup menu when the theme is dark (undocumented uxtheme ordinals 135 / 136)
-    string th = g_settings.value("theme", "SYSTEM");
-    DWORD light = 1, sz = sizeof light;
-    RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &sz);
-    bool dark = th == "DARK" || (th == "SYSTEM" && !light);
-    if (HMODULE ux = LoadLibraryW(L"uxtheme.dll")) {
-      auto setMode = (int(WINAPI*)(int))GetProcAddress(ux, MAKEINTRESOURCEA(135));
-      auto flush = (void(WINAPI*)())GetProcAddress(ux, MAKEINTRESOURCEA(136));
-      if (setMode) { setMode(dark ? 2 : 3); if (flush) flush(); }
+  if (fresh) {
+    g_popOpen = true;
+    g_popCtl->put_IsVisible(TRUE);
+    g_popCtl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+  }
+}
+static std::set<HWND> childWindows() {
+  std::set<HWND> out;
+  EnumChildWindows(g_hwnd, [](HWND ch, LPARAM l) -> BOOL { if (GetParent(ch) == g_hwnd) ((std::set<HWND>*)l)->insert(ch); return TRUE; }, (LPARAM)&out);
+  return out;
+}
+static void createPopup(std::function<void()> then) {
+  auto before = std::make_shared<std::set<HWND>>(childWindows());
+  g_env->CreateCoreWebView2Controller(g_hwnd, H2(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, HRESULT, ICoreWebView2Controller*, ([before, then](HRESULT hr, ICoreWebView2Controller* c) -> HRESULT {
+    if (SUCCEEDED(hr) && c) {
+      g_popCtl = c;
+      c->put_IsVisible(FALSE);
+      for (HWND w : childWindows()) if (!before->count(w)) g_popHwnd = w;
+      c->get_CoreWebView2(g_popWv.put());
+      Com<ICoreWebView2Settings> st;
+      g_popWv->get_Settings(st.put());
+      st->put_AreDefaultContextMenusEnabled(FALSE);
+      st->put_IsStatusBarEnabled(FALSE);
+      st->put_AreDevToolsEnabled(FALSE);
+      st->put_IsZoomControlEnabled(FALSE);
+      if (auto s3 = st.as<ICoreWebView2Settings3>(IID_ICoreWebView2Settings3)) s3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
+      if (auto w3 = g_popWv.as<ICoreWebView2_3>(IID_ICoreWebView2_3)) w3->SetVirtualHostNameToFolderMapping(L"sf.ui", g_ui.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS);
+      EventRegistrationToken tk;
+      g_popWv->add_WebMessageReceived(H2(ICoreWebView2WebMessageReceivedEventHandler, ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs*, ([](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* a) -> HRESULT {
+        CoStr src; a->get_Source(src.put());
+        if (!startsWith(U8(src.w), "https://sf.ui/")) return S_OK;
+        CoStr js; a->get_WebMessageAsJson(js.put());
+        auto m = json::parse(js.str(), nullptr, false);
+        if (m.is_object()) handleUi(m);
+        return S_OK;
+      })), &tk);
+      c->add_LostFocus(H2(ICoreWebView2FocusChangedEventHandler, ICoreWebView2Controller*, IUnknown*, ([](ICoreWebView2Controller*, IUnknown*) -> HRESULT { hidePopup(); return S_OK; })), &tk);
+      g_popWv->Navigate(L"https://sf.ui/popup.html");
     }
-  }
-  POINT p; GetCursorPos(&p);
-  int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0, g_hwnd, nullptr);
-  DestroyMenu(m);
+    then();
+    return S_OK;
+  })));
+}
+
+static void menuAction(int cmd) {
+  bool priv = g_settings.value("private", false);
   Tab* t = g_cur;
   switch (cmd) {
     case 101: newTab(g_settings.value("home", string(kStartUrl))); break;
@@ -1485,7 +1594,30 @@ static void handleUi(const json& m) {
     else if (x.contains("url")) newTab(x["url"]);
     ret();
   }
-  else if (c == "menu") { showMenu(); ret(); }
+  else if (c == "popup") { json x = A(1); showPopup(A(0).get<string>(), x.value("l", 0.0), x.value("r", 0.0), x.value("b", 0.0)); ret(); }
+  else if (c == "popupData") ret(popupData());
+  else if (c == "popupSize") { sizePopup(A(0).get<double>(), A(1).get<double>(), A(2).is_boolean() && A(2).get<bool>()); ret(); }
+  else if (c == "popupClose") { hidePopup(); if (t && t->ctl) t->ctl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC); ret(); }
+  else if (c == "popupSwitch") { g_popKind = A(0).get<string>(); g_popOpen = false; if (g_popCtl) g_popCtl->put_IsVisible(FALSE); g_popR = g_popL + 360; sendPopup(); ret(); }
+  else if (c == "menuAct") {
+    int n = A(0).get<int>();
+    ret();
+    if (n < 105 || n > 107) hidePopup();  // zoom buttons leave the menu open
+    menuAction(n);
+  }
+  else if (c == "siteList") {  // per-site switches in Shields
+    string key = A(0).get<string>(), host = t && !isStart(t->url) ? hostOf(t->url) : "";
+    if ((key == "scriptsOff" || key == "forgetSites") && !host.empty()) {
+      json l = json::array();
+      for (auto& x : g_settings.value(key, json::array())) if (x.get<string>() != host) l.push_back(x);
+      if (A(1).get<bool>()) l.push_back(host);
+      g_settings[key] = l;
+      saveSettings();
+      if (key == "scriptsOff" && t->wv) t->wv->Reload();
+    }
+    ret();
+  }
+  else if (c == "siteCookies" || c == "siteClearCookies") siteCookies(t ? t->url : "", c == "siteClearCookies", [id](int n) { replyUi(id, n); });
   else if (c == "findVideos") { if (t) { openPickerFor(t, json::object()); sendUi("panel", "picker"); } ret(); }
   else if (c == "ytInfo") {
     // a = [url, ctx]; the page logic turns the raw output into quality rows
@@ -1539,6 +1671,8 @@ static void handleUi(const json& m) {
     string before = mode();
     for (auto it = ch.begin(); it != ch.end(); ++it) g_settings[it.key()] = it.value();
     saveSettings();
+    if (ch.contains("antiFinger")) { for (auto& x : g_tabs) applyFingerprint(x.get()); notice("Fingerprint setting changed. Reload pages to use it.", t ? json({{"label", "Reload"}, {"reload", t->id}}) : json(nullptr)); }
+    if (ch.contains("block3p")) notice("Cookie setting changed. Close and reopen Speed Force to use it.", nullptr);
     if (ch.contains("adMode") && ch["adMode"] != before) { reinstallScript(); notice("Ad setting changed. Reload pages to use it.", t ? json({{"label", "Reload"}, {"reload", t->id}}) : json(nullptr)); }
     if (ch.contains("theme")) {
       string th = g_settings.value("theme", "SYSTEM");
@@ -1683,7 +1817,20 @@ static string g_testLog;
 static void testTick() {
   g_testStep++;
   int step = g_testStep;
+  wchar_t pop[8] = {};
+  if (GetEnvironmentVariableW(L"SF_POPUP", pop, 8)) {
+    static const char* kinds[] = {"menu", "site", "shields"};
+    if (step == 4 && g_cur && !g_testUrls.empty()) loadTab(g_cur, g_testUrls[0]);
+    for (int i = 0; i < 3; i++) {
+      int at = 16 + i * 6;
+      if (step == at) { g_popHiddenKind.clear(); hidePopup(); g_popHiddenKind.clear(); if (i == 1) showPopup(kinds[i], 150, 182, 82); else showPopup(kinds[i], 1196, 1232, 82); }
+      if (step == at + 4 && g_popWv) { capturePng(g_popWv.p, g_testPrefix + W(kinds[i]) + L".png"); RECT b{}; g_popCtl->get_Bounds(&b); g_testLog += string(kinds[i]) + " open=" + std::to_string(g_popOpen) + " box=" + std::to_string(b.left) + "," + std::to_string(b.top) + "," + std::to_string(b.right) + "," + std::to_string(b.bottom) + " hwnd=" + std::to_string(g_popHwnd != nullptr) + "\n"; }
+    }
+    if (step == 36) { writeFile(g_testPrefix + L"log.txt", g_testLog); PostMessageW(g_hwnd, WM_CLOSE, 0, 0); }
+    return;
+  }
   auto snap = [&](const wstring& name) {
+    if (g_cur && g_cur->wv) g_cur->wv->ExecuteScript(L"navigator.hardwareConcurrency+' cores, '+navigator.deviceMemory+' GB, cookiesEnabled '+navigator.cookieEnabled", H2(ICoreWebView2ExecuteScriptCompletedHandler, HRESULT, LPCWSTR, ([name](HRESULT, LPCWSTR r) -> HRESULT { if (r) g_testLog += "probe " + U8(name) + " " + U8(r) + "\n"; return S_OK; })));
     if (g_ui_wv) capturePng(g_ui_wv.p, g_testPrefix + name + L"-ui.png");
     if (g_cur && g_cur->wv) capturePng(g_cur->wv.p, g_testPrefix + name + L"-page.png");
     g_testLog += "snap " + U8(name) + " url=" + (g_cur ? g_cur->url : "") + " blocked=" + std::to_string(g_cur ? g_cur->blocked : 0) + " hidden=" + std::to_string(g_cur ? g_cur->hidden : 0) + " tabs=" + std::to_string(g_tabs.size()) + "\n";
@@ -1743,7 +1890,7 @@ static void createUi() {
     })), &tk);
     g_ui_wv->add_NavigationCompleted(H2(ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*, ([](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
       static bool first = true;
-      if (first) { first = false; g_uiReady = true; startBrowsing(g_argUrl); }
+      if (first) { first = false; g_uiReady = true; createPopup([] { for (auto& h : g_settings.value("forgetPending", json::array())) siteCookies("https://" + h.get<string>() + "/", true, [](int) {}); g_settings["forgetPending"] = json::array(); startBrowsing(g_argUrl); layout(); }); }
       return S_OK;
     })), &tk);
     c->add_AcceleratorKeyPressed(H2(ICoreWebView2AcceleratorKeyPressedEventHandler, ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs*, ([](ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs* a) -> HRESULT {
@@ -1801,7 +1948,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       if (B) return HTBOTTOM;
       return HTCLIENT;
     }
-    case WM_SIZE: layout(); return 0;
+    case WM_MOVE: hidePopup(); break;
+    case WM_SIZE: hidePopup(); layout(); return 0;
     case WM_DPICHANGED: {
       RECT* r = (RECT*)l;
       SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1844,6 +1992,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       bool running = false;
       for (auto& d : g_dl) { string s = d.j.value("status", ""); if (s == "RUNNING") running = true; }
       if (running && MessageBoxW(h, L"Downloads are still running. They continue the next time you open Speed Force.", APP_NAME, MB_YESNO | MB_ICONQUESTION) != IDYES) return 0;
+      {
+        json pending = json::array();
+        for (auto& x : g_tabs) if (isHttp(x->url) && inList("forgetSites", hostOf(x->url))) pending.push_back(hostOf(x->url));
+        if (!pending.empty()) { g_settings["forgetPending"] = pending; saveSettings(); }
+      }
       saveTabsNow();
       for (auto& d : g_dl) { if (d.job) TerminateJobObject(d.job, 1); }
       persistDownloads();
@@ -1939,7 +2092,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
 #endif
   // fewer engine processes and no background extras: less memory
   SetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-    L"--renderer-process-limit=4 --disable-background-networking --disable-component-update --disable-sync --disable-features=msSmartScreenProtection,msEdgeShoppingAssistant,msEdgeRewards,Translate --disable-breakpad --no-pings");
+    wstring(g_settings.value("block3p", false) ? L"--test-third-party-cookie-phaseout " : L"").append(L"--renderer-process-limit=4 --disable-background-networking --disable-component-update --disable-sync --disable-features=msSmartScreenProtection,msEdgeShoppingAssistant,msEdgeRewards,Translate --disable-breakpad --no-pings").c_str());
   wstring udf = g_data + L"\\browser";
   typedef HRESULT(STDAPICALLTYPE * CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
   HMODULE loader = LoadLibraryW((g_exe + L"\\WebView2Loader.dll").c_str());

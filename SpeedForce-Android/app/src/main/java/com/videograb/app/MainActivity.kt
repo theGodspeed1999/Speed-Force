@@ -94,14 +94,16 @@ class MainActivity : ComponentActivity(), TabListener {
 
     // ---- search by picture (Google Lens) ----
     private var scanFile: java.io.File? = null
-    private val photoPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri -> if (uri != null) searchByImage(uri, null) }
+    // The phone's own gallery picker (photos and screenshots); it needs no storage permission
+    private val photoPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) searchByImage(uri, null) }
     private val cameraShot = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val f = scanFile
         if (ok && f != null) searchByImage(androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", f), f)
         else f?.delete()
     }
 
-    fun pickPhotoForSearch() = photoPicker.launch("image/*")
+    fun pickPhotoForSearch() =
+        photoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
 
     fun scanWithCamera() {
         val dir = java.io.File(cacheDir, "scan").apply { mkdirs() }
@@ -246,11 +248,20 @@ class MainActivity : ComponentActivity(), TabListener {
         handleShare(intent)
     }
 
-    /** A link shared from another app: go straight to the quality picker. */
+    /** A picture shared from another app goes to Google Lens; a shared link goes to the quality picker. */
     private fun handleShare(intent: Intent?) {
         if (intent == null) return
         intent.getIntExtra(EXTRA_TAB, -1).takeIf { it >= 0 }?.let { screen = it }
         if (intent.action != Intent.ACTION_SEND) return
+        if (intent.type?.startsWith("image/") == true) {
+            @Suppress("DEPRECATION")
+            val picture = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+            // Only pictures the other app hands over: never a file path or something from this app's own storage,
+            // or another app could make us upload our private files
+            if (picture != null && picture.scheme == "content" && picture.authority != "$packageName.files") searchByImage(picture, null)
+            else Toast.makeText(this, "Couldn't read that picture", Toast.LENGTH_LONG).show()
+            return
+        }
         val url = UrlUtils.extractUrl(intent.getStringExtra(Intent.EXTRA_TEXT))
         if (url == null) {
             Toast.makeText(this, "No web link found in what was shared", Toast.LENGTH_LONG).show()
