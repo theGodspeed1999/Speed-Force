@@ -16,6 +16,7 @@
 static const char* kStartUrl = "https://sf.start/";
 // The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
 static const char* kLensUrl = "https://lens.google.com/speedforce/";
+static const char* kDiagUrl = "https://sf.diag/";  // "Why didn't this page load?" (assets\diag)
 static const UINT WM_POSTED = WM_APP + 1;
 static const UINT WM_SHOWME = WM_APP + 2;
 
@@ -71,6 +72,10 @@ struct Tab {
   Com<ICoreWebView2> wv;
   string url, title = "New tab", favicon, pending;
   wstring fpScript;  // id of the fingerprint-protection script in this tab
+  wstring pageScriptId;      // id of the blocking script in this tab, so it can be replaced
+  std::set<string> visited;  // site names this tab showed (for the cookie guard)
+  string lastNav;            // the address being loaded
+  int lastStatus = 0;        // the site's answer code for the last page
   bool lens = false; // used for image search: those pages are not kept
   bool loading = false, ready = false, suspended = false, closing = false;
   int videoCount = 0, blocked = 0, hidden = 0;
@@ -174,7 +179,7 @@ static void launchSelf(const wchar_t* arg) {
 // ---------------------------------------------------------------- settings and files
 static json defaultSettings() {
   return {{"folder", ""}, {"maxRes", 1080}, {"parallel", 2}, {"adMode", "HIDE"}, {"httpsOnly", true}, {"engine", "DuckDuckGo"},
-          {"home", "https://sf.start/"}, {"restoreTabs", true}, {"private", false}, {"theme", "SYSTEM"}, {"shieldsOff", json::array()}, {"engineUpdated", 0}};
+          {"home", "https://sf.start/"}, {"restoreTabs", true}, {"private", false}, {"theme", "SYSTEM"}, {"shieldsOff", json::array()}, {"engineUpdated", 0}, {"rejectCookies", true}, {"cookieGuard", false}};
 }
 static void saveSettings() {
   int p = g_settings.value("parallel", 2);
@@ -207,6 +212,7 @@ static bool isLensPage(bool lensTab, const string& url) {
   return startsWith(url, kLensUrl) || (lensTab && (h == "lens.google.com" || h == "www.google.com" || h == "google.com"));
 }
 static void addHistory(const string& title, const string& url) {
+  if (hostOf(url) == "sf.diag") return;
   if (g_settings.value("private", false) || !isHttp(url) || isStart(url)) return;
   json list = readList(L"history.json"), out = json::array();
   out.push_back({{"t", title}, {"u", url}, {"at", unixMs()}});
@@ -344,7 +350,7 @@ static string pageScript() {
   json ads = json::array();
   for (auto& h : split(g_pageHosts, '\n')) { string t = trim(h); if (!t.empty()) ads.push_back(t); }
   json off = g_settings["shieldsOff"];
-  json cfg = {{"mode", mode()}, {"ads", mode() == "OFF" ? json::array() : ads}, {"wake", ""}, {"off", off}, {"scam", g_scamRe}};
+  json cfg = {{"reject", g_settings.value("rejectCookies", true)}, {"mode", mode()}, {"ads", mode() == "OFF" ? json::array() : ads}, {"wake", ""}, {"off", off}, {"scam", g_scamRe}};
   string s = "(function(){if(window.VideoGrabNative)return;";
   s += "window.VideoGrabNative={postMessage:function(x){try{window.chrome.webview.postMessage(String(x).slice(0,20000))}catch(e){}}};";
   s += "var cfg=" + cfg.dump() + ";window.__vgCfg=cfg;";
@@ -366,6 +372,7 @@ static void wireTab(Tab* t);
 static void loadTab(Tab* t, const string& url);
 static void selectTab(Tab* t);
 static void reinstallScript();
+static void addPageScript(Tab* t);
 
 static string prepareUrl(Tab* t, string u) {
   u = stripTracking(u);
@@ -477,6 +484,15 @@ var H=HTMLCanvasElement.prototype;['toDataURL','toBlob'].forEach(function(n){var
 function fix(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v},configurable:true})}catch(e){}}
 fix(Navigator.prototype,'hardwareConcurrency',4);fix(Navigator.prototype,'deviceMemory',8);
 [window.WebGLRenderingContext,window.WebGL2RenderingContext].forEach(function(G){if(!G)return;var f=G.prototype.getParameter;G.prototype.getParameter=function(p){if(p===37445)return 'Google Inc.';if(p===37446)return 'ANGLE (Generic GPU)';return f.apply(this,arguments)}})})();)JS";
+static void addPageScript(Tab* t) {
+  if (!t->wv) return;
+  if (!t->pageScriptId.empty()) { t->wv->RemoveScriptToExecuteOnDocumentCreated(t->pageScriptId.c_str()); t->pageScriptId.clear(); }
+  int id = t->id;
+  t->wv->AddScriptToExecuteOnDocumentCreated(W(pageScript()).c_str(), H2(ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler, HRESULT, LPCWSTR, ([id](HRESULT, LPCWSTR sid) -> HRESULT {
+    for (auto& x : g_tabs) if (x->id == id && sid) x->pageScriptId = sid;
+    return S_OK;
+  })));
+}
 static void applyFingerprint(Tab* t) {
   if (!t->wv) return;
   bool on = g_settings.value("antiFinger", false);
@@ -500,7 +516,62 @@ static void forgetLensTraces() {
       p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY), nullptr);
   }
 }
+/** Is the site on the "keep me signed in" list? (a trusted name covers its sub-domains) */
+static bool isTrusted(const string& host) {
+  for (auto& x : g_settings.value("trustedSites", json::array())) if (sameSite("https://" + x.get<string>() + "/", "https://" + host + "/")) return true;
+  return false;
+}
+static void listRemove(const char* key, const string& host) {
+  json l = json::array();
+  for (auto& x : g_settings.value(key, json::array())) if (x.get<string>() != host) l.push_back(x);
+  g_settings[key] = l;
+}
+/** Cookie guard: the site's cookies are thrown away, unless it is trusted. */
+static void guardClean(const string& host) {
+  if (!g_settings.value("cookieGuard", false) || host.empty() || isTrusted(host)) return;
+  siteCookies("https://" + host + "/", true, [](int) {});
+  listRemove("guardSeen", host);
+  saveSettings();
+}
+/** Remembered until cleaned, so that cookies are also thrown away if the app is closed with the tab open. */
+static void guardNote(Tab* t, const string& url) {
+  if (!isHttp(url) || isStart(url) || isLensPage(t->lens, url) || hostOf(url) == "sf.diag") return;
+  string h = hostOf(url);
+  t->visited.insert(h);
+  if (g_settings.value("cookieGuard", false) && !isTrusted(h) && !inList("guardSeen", h)) {
+    json l = g_settings.value("guardSeen", json::array());
+    l.push_back(h);
+    g_settings["guardSeen"] = l;
+    saveSettings();
+  }
+}
+/** The tab is closing: every site it showed that is open nowhere else is cleaned. */
+static void guardTabClosed(Tab* t) {
+  std::set<string> sites = t->visited;
+  if (isHttp(t->url)) sites.insert(hostOf(t->url));
+  for (auto& h : sites) {
+    bool open = false;
+    for (auto& x : g_tabs) if (x.get() != t && sameSite(x->url, "https://" + h + "/")) open = true;
+    if (!open) guardClean(h);
+  }
+}
+/** At start: clean what the last run left, except sites that are open again in the restored tabs. */
+static void guardAtStart() {
+  json saved = g_settings.value("restoreTabs", true) ? readJson(g_data + L"\\tabs.json", json::object()) : json::object();
+  json seen = g_settings.value("guardSeen", json::array());
+  for (auto& x : seen) {
+    string h = x.get<string>();
+    bool open = false;
+    if (saved.contains("u")) for (auto& u : saved["u"]) if (sameSite(u.get<string>(), "https://" + h + "/")) open = true;
+    if (!open) guardClean(h);
+  }
+}
+static string diagUrl(const string& page, const string& kind, int status) {
+  return string(kDiagUrl) + "?u=" + urlEncode(page) + "&k=" + kind + "&s=" + std::to_string(status);
+}
+
 static void closeTab(Tab* t) {
+  guardTabClosed(t);
   if (isHttp(t->url) && inList("forgetSites", hostOf(t->url))) {  // "Forget me when I close this site"
     bool other = false;
     for (auto& x : g_tabs) if (x.get() != t && hostOf(x->url) == hostOf(t->url)) other = true;
@@ -1004,7 +1075,7 @@ static void wireTab(Tab* t) {
     return S_OK;
   })), &tk);
   // script for every page and frame
-  wv->AddScriptToExecuteOnDocumentCreated(W(pageScript()).c_str(), nullptr);
+  addPageScript(t);
   applyFingerprint(t);
   wv->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
   // every request: ads and trackers are stopped here; video streams are noted
@@ -1018,14 +1089,15 @@ static void wireTab(Tab* t) {
     string u = U8(uri.w);
     if (!isHttp(u)) return S_OK;
     bool lensPage = startsWith(u, kLensUrl);
-    if (hostOf(u) == "sf.start" || lensPage) {  // our own pages: answered here from the assets folder (no network, never filtered)
+    bool diagPage = hostOf(u) == "sf.diag";
+    if (hostOf(u) == "sf.start" || lensPage || diagPage) {  // our own pages: answered here from the assets folder (no network, never filtered)
       string path = u.substr(u.find("://") + 3);
       path = path.substr(path.find('/') == string::npos ? path.size() : path.find('/') + 1);
       path = path.substr(0, path.find_first_of("?#"));
       if (lensPage) path = u.substr(strlen(kLensUrl), u.find_first_of("?#") == string::npos ? string::npos : u.find_first_of("?#") - strlen(kLensUrl));
       if (path.empty()) path = "index.html";
-      const char* type = path == "index.html" ? "text/html; charset=utf-8" : path == "start.js" || path == "lens.js" ? "application/javascript" : path == "logo.png" ? "image/png" : nullptr;
-      string body = type ? readFile(g_assets + (lensPage ? L"\\lens\\" : L"\\start\\") + W(path)) : "";
+      const char* type = path == "index.html" ? "text/html; charset=utf-8" : path == "start.js" || path == "lens.js" || path == "diag.js" ? "application/javascript" : path == "logo.png" ? "image/png" : nullptr;
+      string body = type ? readFile(g_assets + (lensPage ? L"\\lens\\" : diagPage ? L"\\diag\\" : L"\\start\\") + W(path)) : "";
       IStream* ms = SHCreateMemStream((const BYTE*)body.data(), (UINT)body.size());
       Com<ICoreWebView2WebResourceResponse> rs;
       wstring hdr = L"Content-Type: " + W(type ? type : "text/plain") + L"\r\nCache-Control: no-store";
@@ -1076,6 +1148,8 @@ static void wireTab(Tab* t) {
     string l = lower(u.substr(0, 8));
     if (!(startsWith(l, "http") || startsWith(l, "about:") || startsWith(l, "data:") || startsWith(l, "blob:") || startsWith(l, "file:"))) { a->put_Cancel(TRUE); return S_OK; }
     if (!isHttp(u)) return S_OK;
+    t->lastNav = u;
+    t->lastStatus = 0;
     if (t->wv) {  // "Block scripts" for this site (takes effect for the page now being opened)
       Com<ICoreWebView2Settings> st;
       t->wv->get_Settings(st.put());
@@ -1119,6 +1193,10 @@ static void wireTab(Tab* t) {
     t->loading = false;
     if (!t->finished) t->finished = nowMs();
     BOOL ok = TRUE; a->get_IsSuccess(&ok);
+    {
+      ICoreWebView2NavigationCompletedEventArgs2* a2 = nullptr;
+      if (SUCCEEDED(a->QueryInterface(IID_ICoreWebView2NavigationCompletedEventArgs2, (void**)&a2)) && a2) { a2->get_HttpStatusCode(&t->lastStatus); a2->Release(); }
+    }
     if (!ok) {
       COREWEBVIEW2_WEB_ERROR_STATUS es; a->get_WebErrorStatus(&es);
       CoStr uri; w->get_Source(uri.put());
@@ -1134,11 +1212,24 @@ static void wireTab(Tab* t) {
         } else if (es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED) {
           notice("The secure (https) version of " + h + " did not work.", {{"label", "Open insecure http"}, {"http", "http://" + u.substr(8)}, {"tab", t->id}});
         }
+        if (wasUpgraded && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED) { pushState(); return S_OK; }
+      }
+      // no page at all (the site sent no answer): say why, in plain words. Certificate warnings and the
+      // site's own error pages are left as they are; "Why won't this site load?" in the menu covers those.
+      if (t->lastStatus == 0 && isHttp(t->lastNav) && hostOf(t->lastNav).rfind("sf.", 0) != 0) {
+        const char* kind = es == COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED ? "dns"
+                         : es == COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT ? "timeout"
+                         : es == COREWEBVIEW2_WEB_ERROR_STATUS_DISCONNECTED ? "offline"
+                         : es == COREWEBVIEW2_WEB_ERROR_STATUS_CANNOT_CONNECT || es == COREWEBVIEW2_WEB_ERROR_STATUS_SERVER_UNREACHABLE ||
+                           es == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_RESET || es == COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN ||
+                           es == COREWEBVIEW2_WEB_ERROR_STATUS_ERROR_HTTP_INVALID_SERVER_RESPONSE ? "connect" : nullptr;
+        if (kind && t->wv) t->wv->Navigate(W(diagUrl(t->lastNav, kind, 0)).c_str());
       }
     } else {
       CoStr title; w->get_DocumentTitle(title.put());
       t->title = title.w && *title.w ? title.str() : t->url;
       if (!isLensPage(t->lens, t->url)) addHistory(t->title, t->url);
+      guardNote(t, t->url);
     }
     pushState();
     return S_OK;
@@ -1334,10 +1425,7 @@ static void wireTab(Tab* t) {
 
 static void reinstallScript() {
   // new settings (ad mode, shields) only reach pages opened afterwards: scripts are replaced in every tab
-  for (auto& t : g_tabs) {
-    if (!t->wv) continue;
-    t->wv->AddScriptToExecuteOnDocumentCreated(W(pageScript()).c_str(), nullptr);
-  }
+  for (auto& t : g_tabs) addPageScript(t.get());
 }
 
 // ---------------------------------------------------------------- commands from the toolbar and panels
@@ -1383,7 +1471,7 @@ static json popupData() {
   return {{"kind", g_popKind}, {"theme", g_settings.value("theme", "SYSTEM")}, {"start", st}, {"host", host}, {"secure", startsWith(url, "https:")},
           {"favicon", st ? "" : t->favicon}, {"blocked", t ? t->blocked : 0}, {"hidden", t ? t->hidden : 0}, {"shieldsDown", t && shieldsDown(t)},
           {"adMode", mode()}, {"httpsOnly", g_settings.value("httpsOnly", true)}, {"antiFinger", g_settings.value("antiFinger", false)},
-          {"block3p", g_settings.value("block3p", false)}, {"scriptsOff", inList("scriptsOff", host)}, {"forget", inList("forgetSites", host)},
+          {"block3p", g_settings.value("block3p", false)}, {"scriptsOff", inList("scriptsOff", host)}, {"cookieGuard", g_settings.value("cookieGuard", false)}, {"rejectCookies", g_settings.value("rejectCookies", true)}, {"trusted", !host.empty() && isTrusted(host)}, {"forget", inList("forgetSites", host)},
           {"passwords", g_settings.value("savePasswords", false) && !g_private}, {"private", g_private}, {"privateMode", g_settings.value("private", false)},
           {"closed", (int)g_closed.size()}, {"extensions", ext}, {"zoom", t ? (int)(t->zoom * 100 + 0.5) : 100}};
 }
@@ -1508,6 +1596,10 @@ static void menuAction(int cmd) {
     case 122: if (t && t->wv) t->wv->OpenDevToolsWindow(); break;
     case 123: launchSelf(L"--window"); break;
     case 127: newTab(kLensUrl); break;
+    case 128:
+      if (t && isHttp(t->url) && !isStart(t->url) && hostOf(t->url) != "sf.diag") newTab(diagUrl(t->url, "", t->lastStatus));
+      else notice("Open the page that does not load, then use this.", nullptr);
+      break;
     case 124: launchSelf(L"--private"); break;
     case 126:
       g_settings["savePasswords"] = !g_settings.value("savePasswords", false);
@@ -1631,7 +1723,7 @@ static void handleUi(const json& m) {
   }
   else if (c == "siteList") {  // per-site switches in Shields
     string key = A(0).get<string>(), host = t && !isStart(t->url) ? hostOf(t->url) : "";
-    if ((key == "scriptsOff" || key == "forgetSites") && !host.empty()) {
+    if ((key == "scriptsOff" || key == "forgetSites" || key == "trustedSites") && !host.empty()) {
       json l = json::array();
       for (auto& x : g_settings.value(key, json::array())) if (x.get<string>() != host) l.push_back(x);
       if (A(1).get<bool>()) l.push_back(host);
@@ -1696,6 +1788,8 @@ static void handleUi(const json& m) {
     for (auto it = ch.begin(); it != ch.end(); ++it) g_settings[it.key()] = it.value();
     saveSettings();
     if (ch.contains("antiFinger")) { for (auto& x : g_tabs) applyFingerprint(x.get()); notice("Fingerprint setting changed. Reload pages to use it.", t ? json({{"label", "Reload"}, {"reload", t->id}}) : json(nullptr)); }
+    if (ch.contains("rejectCookies")) { reinstallScript(); notice("Cookie banner setting changed. Reload pages to use it.", t ? json({{"label", "Reload"}, {"reload", t->id}}) : json(nullptr)); }
+    if (ch.contains("cookieGuard") && g_settings.value("cookieGuard", false)) { for (auto& x : g_tabs) guardNote(x.get(), x->url); notice("Cookie guard is on: a site\'s cookies are deleted when you close it. Add sites you stay signed in to under Shields.", nullptr); }
     if (ch.contains("block3p")) notice("Cookie setting changed. Close and reopen Speed Force to use it.", nullptr);
     if (ch.contains("adMode") && ch["adMode"] != before) { reinstallScript(); notice("Ad setting changed. Reload pages to use it.", t ? json({{"label", "Reload"}, {"reload", t->id}}) : json(nullptr)); }
     if (ch.contains("theme")) {
@@ -1801,7 +1895,7 @@ static void saveTabsNow() {
   int cur = 0;
   for (auto& t : g_tabs) {
     string url = !t->pending.empty() ? t->pending : t->url;
-    if (isHttp(url) && !isStart(url) && !isLensPage(t->lens, url) && u.size() < 50) { if (t.get() == g_cur) cur = (int)u.size(); u.push_back(url); }
+    if (isHttp(url) && !isStart(url) && !isLensPage(t->lens, url) && hostOf(url) != "sf.diag" && u.size() < 50) { if (t.get() == g_cur) cur = (int)u.size(); u.push_back(url); }
   }
   writeFile(g_data + L"\\tabs.json", json({{"u", u}, {"i", cur}}).dump());
   writeFile(g_data + L"\\stats.json", g_stats.dump());
@@ -1915,7 +2009,7 @@ static void createUi() {
     })), &tk);
     g_ui_wv->add_NavigationCompleted(H2(ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*, ([](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
       static bool first = true;
-      if (first) { first = false; g_uiReady = true; createPopup([] { for (auto& h : g_settings.value("forgetPending", json::array())) siteCookies("https://" + h.get<string>() + "/", true, [](int) {}); g_settings["forgetPending"] = json::array(); if (g_settings.value("lensDirty", false)) { forgetLensTraces(); g_settings["lensDirty"] = false; saveSettings(); } startBrowsing(g_argUrl); layout(); }); }
+      if (first) { first = false; g_uiReady = true; createPopup([] { for (auto& h : g_settings.value("forgetPending", json::array())) siteCookies("https://" + h.get<string>() + "/", true, [](int) {}); g_settings["forgetPending"] = json::array(); guardAtStart(); if (g_settings.value("lensDirty", false)) { forgetLensTraces(); g_settings["lensDirty"] = false; saveSettings(); } startBrowsing(g_argUrl); layout(); }); }
       return S_OK;
     })), &tk);
     c->add_AcceleratorKeyPressed(H2(ICoreWebView2AcceleratorKeyPressedEventHandler, ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs*, ([](ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs* a) -> HRESULT {

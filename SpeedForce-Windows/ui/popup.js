@@ -106,7 +106,7 @@ function menuView() {
     extensions: ['Extensions', () => [item('puzzle', 'Add extension (unpacked folder)…', act(125), { off: d.private }), ...d.extensions.map((n, i) => item('exit', 'Remove ' + n, act(200 + i)))]],
     find: ['Find and edit', () => [item('find', 'Find in page', act(104), { key: 'Ctrl+F' }), item(null, 'Cut', act(118), { key: 'Ctrl+X' }), item(null, 'Copy', act(119), { key: 'Ctrl+C' }), item(null, 'Paste', act(120), { key: 'Ctrl+V' })]],
     save: ['Save and share', () => [item(null, 'Copy page address', act(121))]],
-    more: ['More tools', () => [item('video', 'Find videos on this page', act(103)), item(null, 'Shields log', act(111)), item('code', 'Developer tools', act(122), { key: 'F12' }), item(null, d.privateMode ? 'Turn off private mode (no history)' : 'Private mode (no history)', act(113))]],
+    more: ['More tools', () => [item('video', 'Find videos on this page', act(103)), item('warn', 'Why won\u2019t this site load?', act(128)), item(null, 'Shields log', act(111)), item('code', 'Developer tools', act(122), { key: 'F12' }), item(null, d.privateMode ? 'Turn off private mode (no history)' : 'Private mode (no history)', act(113))]],
   };
   if (sub) return h('div', { class: 'menu' }, item('back', SUBS[sub][0], () => { sub = ''; render(); }, { cls: 'back' }), h('hr'), SUBS[sub][1]());
   const zoom = n => async () => { await cmd('menuAct', n); refresh(); };
@@ -159,6 +159,7 @@ function siteView() {
       cookies == null ? 'Counting…' : `${cookies} cookie${cookies === 1 ? '' : 's'} saved for this page.`,
       cookies > 0 && h('div', {}, h('button', { class: 'btn', onclick: async () => { cookies = await cmd('siteClearCookies'); render(); } }, 'Delete cookies'))));
   }
+  if (!d.start) out.push(row('warn', 'Check why it won\u2019t load', act(128), 'chev'));
   out.push(row('gear', 'Site settings', () => { cmd('popupSwitch', 'shields'); }, 'external'));
   return h('div', { class: 'site' }, out);
 }
@@ -194,7 +195,10 @@ function shieldsView() {
       !d.start && switchRow('code', 'Block scripts', d.scriptsOff, siteFlag('scriptsOff', !d.scriptsOff)),
       switchRow('finger', 'Block fingerprinting', d.antiFinger, async () => { await set({ antiFinger: !d.antiFinger }); refresh(); }),
       picker('cookies', 'cookie', d.block3p, [[true, 'Block third-party cookies'], [false, 'Allow all cookies']], v => set({ block3p: v })),
-      !d.start && switchRow('broom', 'Forget me when I close this site', d.forget, siteFlag('forgetSites', !d.forget)),
+      switchRow('cookie', 'Reject cookie banners', d.rejectCookies, async () => { await set({ rejectCookies: !d.rejectCookies }); refresh(); }),
+      switchRow('broom', 'Cookie guard: delete cookies when I close a site', d.cookieGuard, async () => { await set({ cookieGuard: !d.cookieGuard }); refresh(); }),
+      !d.start && d.cookieGuard && switchRow('lock', 'Trust this site: keep me signed in', d.trusted, siteFlag('trustedSites', !d.trusted)),
+      !d.start && !d.cookieGuard && switchRow('broom', 'Forget me when I close this site', d.forget, siteFlag('forgetSites', !d.forget)),
     ]));
   out.push(h('div', { class: 'two' }, h('button', { onclick: act(111) }, 'Shields log'), h('button', { onclick: act(112) }, 'Global Settings')));
   out.push(h('div', { class: 'foot' }, 'If this site seems broken, try Shields down. This turns Speed Force’s protection off for this site.'));

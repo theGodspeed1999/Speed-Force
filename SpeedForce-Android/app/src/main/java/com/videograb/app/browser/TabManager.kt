@@ -84,7 +84,9 @@ class TabManager(private val context: Context, private val listener: TabListener
 
     fun close(index: Int, homeUrl: String) {
         if (index !in tabs.indices) return
-        tabs.removeAt(index).destroy()
+        val closing = tabs.removeAt(index)
+        CookieGuard.tabClosed(closing.visited, urls())
+        closing.destroy()
         if (tabs.isEmpty()) newTab(homeUrl)
         if (index < currentIndex) currentIndex--
         currentIndex = currentIndex.coerceIn(0, tabs.size - 1)

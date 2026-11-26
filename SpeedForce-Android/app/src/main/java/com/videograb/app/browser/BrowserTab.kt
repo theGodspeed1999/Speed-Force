@@ -218,6 +218,17 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         webView.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
     }
 
+    /** Site names this tab showed (for the cookie guard). */
+    val visited = mutableSetOf<String>()
+    /** The site's error code for the page on screen, 0 when it answered normally. */
+    var lastStatus = 0
+        private set
+
+    /** The "why didn't this page load" page. [kind] is empty when the user just asks. */
+    fun showDiagnostic(page: String, kind: String, status: Int) {
+        loadHtml(Diagnostic.BASE, Diagnostic.page(context, page, kind, status))
+    }
+
     /** Address of a reopened tab that loads only when you open it. */
     var pendingUrl: String? = null
         private set
@@ -410,6 +421,7 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
 
         override fun onPageStarted(view: WebView, pageUrl: String, favicon: Bitmap?) {
             if (popupRefused(pageUrl)) { view.stopLoading(); return }
+            lastStatus = 0
             pageFinishedAt = 0L
             dialogsMuted = false
             dialogTimes.clear()
@@ -429,7 +441,15 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 view.evaluateJavascript(fullScript(view.context), null)
             }
-            Prefs.addHistory(title, pageUrl)
+            if (!pageUrl.startsWith(Diagnostic.BASE)) {
+                Prefs.addHistory(title, pageUrl)
+                val site = UrlUtils.host(pageUrl)
+                if (site != null && pageUrl.startsWith("http")) { visited.add(site); CookieGuard.note(site) }
+            }
+        }
+
+        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+            if (request.isForMainFrame) lastStatus = errorResponse.statusCode
         }
 
         override fun doUpdateVisitedHistory(view: WebView, pageUrl: String, isReload: Boolean) {
@@ -438,7 +458,12 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (request.isForMainFrame) offerHttpFallback(request.url.toString())
+            if (!request.isForMainFrame) return
+            val failed = request.url.toString()
+            if (offerHttpFallback(failed) || failed.startsWith(Diagnostic.BASE) || !UrlUtils.isHttp(failed)) return
+            // no page at all: say why, in plain words
+            val kind = Diagnostic.kindOf(error) ?: return
+            main.post { showDiagnostic(failed, kind, 0) }
         }
 
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {

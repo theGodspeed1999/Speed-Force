@@ -359,6 +359,56 @@
     ytCss();
   }
 
+  // --- cookie banners: choose "reject" for the user ---
+  // Only a button that says reject (or "necessary only") and sits in a cookie / consent box is pressed.
+  // Nothing is ever accepted. Banners without such a button are left for the user.
+  if (CFG.mode !== 'OFF' && CFG.reject !== false) {
+    // a ready-made "reject all" choice for Google and YouTube, set before their consent box is built
+    try {
+      var cm = /(^|\.)(youtube\.com|google\.com)$/.exec(location.hostname);
+      if (cm && window === window.top && !/(^|;\s*)SOCS=/.test(document.cookie)) {
+        document.cookie = 'SOCS=CAI; domain=.' + cm[2] + '; path=/; max-age=31536000; secure; samesite=lax';
+      }
+    } catch (e) {}
+    var REJECT_IDS = '#onetrust-reject-all-handler,.ot-pc-refuse-all-handler,#CybotCookiebotDialogBodyButtonDecline,' +
+      '#CybotCookiebotDialogBodyLevelButtonLevelOptinDeclineAll,#didomi-notice-disagree-button,.cmpboxbtnno,' +
+      '.cky-btn-reject,.cmplz-deny,#cookie_action_close_header_reject,.osano-cm-denyAll,[data-testid="uc-deny-all-button"],' +
+      '.fc-cta-do-not-consent,#truste-consent-required';
+    var REJECT_TEXT = /^(reject|reject all|reject all cookies|reject cookies|reject non[- ]essential( cookies)?|decline|decline all|decline cookies|deny|deny all|refuse|refuse all|disagree|disagree and close|(use )?(only )?(necessary|essential|required)( cookies)?( only)?|allow (only )?(necessary|essential)( cookies)?( only)?|continue without accepting)$/i;
+    var CONSENT_BOX = /cookie|consent|gdpr|ccpa|cmp[-_]|privacy[-_ ]?(banner|notice|popup)|didomi|onetrust|cookiebot|qc-cmp|truste|osano|cky-/i;
+    var inConsentBox = function (el) {
+      for (var i = 0, n = el; n && n !== document.body && i < 8; i++, n = n.parentElement) {
+        var tag = (n.id || '') + ' ' + (typeof n.className === 'string' ? n.className : '') + ' ' + (n.getAttribute && (n.getAttribute('aria-label') || '') || '');
+        if (CONSENT_BOX.test(tag)) return true;
+        var role = n.getAttribute && n.getAttribute('role');
+        if ((role === 'dialog' || role === 'alertdialog') && /cookie/i.test((n.textContent || '').slice(0, 3000))) return true;
+      }
+      return false;
+    };
+    var shown = function (el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); };
+    var rejected = false, tries = 0;
+    var rejectBanner = function () {
+      if (rejected || !document.body) return;
+      var b = null, known = document.querySelectorAll(REJECT_IDS);
+      for (var i = 0; i < known.length && !b; i++) if (shown(known[i])) b = known[i];
+      if (!b) {
+        var all = document.querySelectorAll('button,[role="button"],input[type="button"],input[type="submit"],a');
+        for (var j = 0; j < all.length && j < 1500; j++) {
+          var el = all[j];
+          var text = (el.innerText || el.value || '').replace(/\s+/g, ' ').trim();
+          if (!text || text.length > 40 || !REJECT_TEXT.test(text)) continue;
+          if (el.tagName === 'A' && /^https?:/.test(el.getAttribute('href') || '')) continue;
+          if (shown(el) && inConsentBox(el)) { b = el; break; }
+        }
+      }
+      if (b) { rejected = true; try { b.click(); } catch (e) {} }
+    };
+    var bannerTimer = setInterval(function () {
+      rejectBanner();
+      if (rejected || ++tries > 25) clearInterval(bannerTimer);
+    }, 800);
+  }
+
   // --- ad hiding ---
   var AD_SELECTORS = [
     'ins.adsbygoogle', '[id^="div-gpt-ad"]', '[id^="google_ads_"]', '[data-ad-slot]',

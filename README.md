@@ -30,6 +30,9 @@ runtime, which most Windows 10 and 11 PCs already have.
 - **Stops popups and forced redirects**, and keeps a log of what it stopped.
 - **Downloads videos** with a choice of quality, and **downloads other files** too.
 - **Tries the secure (https) version** of a site first.
+- **Rejects cookie banners** for you where they offer it, and never presses Accept.
+- **Cookie guard** (off until you turn it on): deletes a site's cookies when you close it, except on sites you trust.
+- **Tells you why a page did not load**, and can check from test servers in other countries whether the site opens there.
 - **Tabs**, private browsing, history, bookmarks and a choice of search engine.
 - **Light, dark or system theme.**
 - A clean start page with no news and no sponsored tiles.
@@ -54,6 +57,7 @@ runtime, which most Windows 10 and 11 PCs already have.
 - There is no Speed Force account.
 - Websites, your search engine and the web engine of your system work as they do in any browser.
 - If you use Google Lens search, the picture you choose is sent to Google.
+- The country check runs only when you press its button. It sends the site's name to [Globalping](https://globalping.io), which also sees your internet address. It does not unblock sites.
 
 ## Fair use
 

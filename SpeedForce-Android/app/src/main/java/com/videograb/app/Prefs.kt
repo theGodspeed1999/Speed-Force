@@ -64,6 +64,18 @@ object Prefs {
     /** Third-party cookies let ad networks follow you across sites. Off unless a player needs them. */
     var thirdPartyCookies by pref("3pCookies", false)
 
+    /** Press "Reject" on cookie banners. */
+    var rejectCookies by pref("rejectCookies", true)
+    /** Delete a site's cookies when it is closed (trusted sites keep theirs). */
+    var cookieGuard by pref("cookieGuard", false)
+    fun trustedSites(): Set<String> = sp.getStringSet("trustedSites", emptySet())!!.toSet()
+    fun setTrusted(host: String, on: Boolean) {
+        sp.edit().putStringSet("trustedSites", if (on) trustedSites() + host else trustedSites() - host).apply()
+    }
+    /** Sites the cookie guard still has to clean. */
+    fun guardSeen(): Set<String> = sp.getStringSet("guardSeen", emptySet())!!.toSet()
+    fun setGuardSeen(hosts: Set<String>) { sp.edit().putStringSet("guardSeen", hosts).apply() }
+
     /** "speedforce://start" = the Speed Force start page (stats + top sites), or a web address. */
     var homePage by pref("home", "speedforce://start")
 
@@ -143,7 +155,7 @@ object Prefs {
     fun saveTabs(urls: List<String>, current: Int) {
         if (privateMode || !restoreTabs) { clearSavedTabs(); return }
         val arr = JSONArray()
-        urls.filter { it.startsWith("http") }.take(50).forEach { arr.put(it) }
+        urls.filter { it.startsWith("http") && !it.startsWith(com.videograb.app.browser.Diagnostic.BASE) }.take(50).forEach { arr.put(it) }
         sp.edit().putString("tabs", JSONObject().put("u", arr).put("i", current).toString()).apply()
     }
 

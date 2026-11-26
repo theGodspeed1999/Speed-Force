@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Why didn't this page load?</title>
+<style>
+  :root { color-scheme: light dark; --bg: #1b1c22; --card: #2b2d37; --line: #4a4c5a; --text: #ededf1; --dim: #a8aab8; --accent: #ff7654; }
+  @media (prefers-color-scheme: light) { :root { --bg: #f6f6f9; --card: #fff; --line: #d6d7e0; --text: #1b1c22; --dim: #5d5f6e; --accent: #d9411a; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 620px; margin: 0 auto; padding: 40px 18px; }
+  h1 { font-size: 23px; margin: 0 0 4px; }
+  #host { color: var(--dim); overflow-wrap: anywhere; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-top: 18px; }
+  button { font: inherit; font-weight: 600; cursor: pointer; border-radius: 20px; border: 1px solid var(--accent); background: none; color: var(--text); padding: 8px 20px; margin: 8px 8px 0 0; }
+  button:disabled { opacity: .5; }
+  select { font: inherit; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  td { padding: 7px 4px; border-top: 1px solid var(--line); }
+  tr.ok td:last-child { color: #3dba6b; }
+  tr.refused td:last-child { color: #ffb74d; }
+  tr.fail td:last-child { color: var(--accent); }
+  small { display: block; color: var(--dim); margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Why didn't this page load?</h1>
+  <div id="host"></div>
+  <div class="card">
+    <div id="why"></div>
+    <button id="retry" type="button">Try again</button>
+  </div>
+  <div class="card">
+    <label>Your country <select id="home"></select></label><br>
+    <button id="check" type="button">Check from other countries</button>
+    <small>Sends only the site's name to Globalping, a free public service, which tries it from its test servers. Globalping also sees your internet address. This does not unblock the site. Test servers are often in data centres, so a block by your home provider may not show on them.</small>
+    <div id="verdict" hidden>
+      <h3 id="verdict-title"></h3>
+      <div id="verdict-text"></div>
+      <table><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+</main>
+<script src="diag.js"></script>
+</body>
+</html>

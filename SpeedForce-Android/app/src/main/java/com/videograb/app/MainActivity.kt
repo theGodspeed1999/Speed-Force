@@ -145,6 +145,7 @@ class MainActivity : ComponentActivity(), TabListener {
         // Reopen the tabs from last time (like a normal browser); a link you opened the app with goes on top
         val (saved, front) = Prefs.savedTabs()
         if (saved.isNotEmpty()) tabs.restore(saved, front)
+        com.videograb.app.browser.CookieGuard.atStart(saved + listOfNotNull(startUrl))
         if (startUrl != null || saved.isEmpty()) tabs.newTab(startUrl ?: Prefs.homePage)
         handleShare(intent)
         askPermissions()

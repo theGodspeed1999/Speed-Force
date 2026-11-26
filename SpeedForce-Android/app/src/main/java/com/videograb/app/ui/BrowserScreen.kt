@@ -324,6 +324,11 @@ fun BrowserScreen(activity: MainActivity) {
                     hint = "Pick one from your phone: results open in a tab")
                 MenuRow(Icons.Filled.Search, "Google Lens: use the camera", { showMenu = false; activity.scanWithCamera() })
                 MenuRow(Icons.Filled.Search, "Find videos on this page", { showMenu = false; activity.openPickerForCurrentPage() })
+                MenuRow(Icons.Filled.Info, "Why won't this site load?", {
+                    showMenu = false
+                    if (tab.url.startsWith("http") && !tab.url.startsWith(com.videograb.app.browser.Diagnostic.BASE)) tab.showDiagnostic(tab.url, "", tab.lastStatus)
+                    else Toast.makeText(activity, "Open the page that does not load, then use this", Toast.LENGTH_LONG).show()
+                })
                 MenuRow(Icons.Filled.Notifications, "Shields log", { showMenu = false; activity.openScreen(2) },
                     hint = if (activity.blockedCount > 0) "Popups caught: ${activity.blockedCount}" else null)
                 MenuRow(Icons.Filled.Settings, "Settings", { showMenu = false; activity.openScreen(3) })
@@ -382,6 +387,19 @@ fun BrowserScreen(activity: MainActivity) {
                 SwitchLine("Upgrade connections to HTTPS", "Opens https:// even when a link says http://", https) { https = it; Prefs.httpsOnly = it }
                 SwitchLine("Block cross-site cookies", "Stops ad networks following you from site to site", cookies) {
                     cookies = it; Prefs.thirdPartyCookies = !it; activity.applySettingsToTabs()
+                }
+                var reject by remember { mutableStateOf(Prefs.rejectCookies) }
+                var guard by remember { mutableStateOf(Prefs.cookieGuard) }
+                var trust by remember(host) { mutableStateOf(host.isNotEmpty() && host in Prefs.trustedSites()) }
+                SwitchLine("Reject cookie banners", "Presses Reject for you. Never presses Accept", reject) {
+                    reject = it; Prefs.rejectCookies = it; activity.applySettingsToTabs()
+                }
+                SwitchLine("Cookie guard", "Deletes a site's cookies when you close it. You are signed out there", guard) {
+                    guard = it; Prefs.cookieGuard = it
+                    if (it) tab.visited.forEach { s -> com.videograb.app.browser.CookieGuard.note(s) }
+                }
+                if (guard && host.isNotEmpty()) {
+                    SwitchLine("Trust this site", "Keep me signed in here", trust) { trust = it; Prefs.setTrusted(host, it) }
                 }
                 SwitchLine("Encrypted DNS (Cloudflare)", "Opens sites your provider blocks", dns) {
                     dns = it; Prefs.secureDns = it; com.videograb.app.net.SecureDns.apply(web = true)

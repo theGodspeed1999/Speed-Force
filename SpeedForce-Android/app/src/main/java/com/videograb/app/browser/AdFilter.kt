@@ -132,7 +132,7 @@ object AdFilter {
         if (mode != AdMode.OFF) adHosts.forEach { arr.put(it) }
         val off = JSONArray()
         com.videograb.app.Prefs.shieldsDownHosts().forEach { off.put(it) }
-        return "window.__vgCfg={mode:'${mode.name}',ads:$arr,wake:'$wakeKey',off:$off};\n"
+        return "window.__vgCfg={mode:'${mode.name}',ads:$arr,wake:'$wakeKey',off:$off,reject:${com.videograb.app.Prefs.rejectCookies}};\n"
     }
 
     /** Secret for the app's "start the player" message, so a page can't send it to its frames. */
