@@ -67,6 +67,10 @@ runtime, which most Windows 10 and 11 PCs already have.
 
 Only download content that you own or are allowed to save, and follow the terms of the site you use.
 
+## Issues
+
+If there are any issues or bugs found, kindly report them in the [Issues](../../issues) tab.
+
 ## For developers
 
 | Folder | App |
