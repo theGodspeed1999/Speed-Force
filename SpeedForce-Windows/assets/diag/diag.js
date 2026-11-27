@@ -44,12 +44,12 @@ function conclude(local, rows, home) {
     if (marks.every(m => m.mark === 'refused')) return ['Can’t tell: the site refuses automatic checks', 'Every test server was refused. That is common for sites with bot protection. Try the address in another browser.'];
     return ['The website is probably down', 'It did not open from any test server either. This is on the website’s side; try again later.'];
   }
-  if (here.length && !ok(here) && ok(away)) return ['It may be blocked in your country', 'It opens from other countries but not from the test server in ' + home + '.'];
+  if (here.length && !ok(here) && ok(away)) return ['It may be blocked in your country', 'It opens from other countries but not from the test server in ' + (COUNTRIES[home] || home) + '.'];
   if (local === 'server') return ['The website is having trouble', 'It opens from at least one test server, but gave you a server error. Try again later.'];
   if (local === 'refused') return ['The site may be refusing your browser or connection', 'Test servers can open it, but you were refused. Try the same address in another browser: if it works there, this browser is being refused; if not, your internet address may be.'];
   if (local === 'dns' || local === 'connect' || local === 'timeout') {
     return here.length
-      ? ['Your internet provider or network may be blocking it', 'The test server in ' + home + ' can open the site, but your device cannot. Another network (for example mobile data) will show if it is your provider.']
+      ? ['Your internet provider or network may be blocking it', 'A data-center test server in ' + (COUNTRIES[home] || home) + ' can reach the site, but your device cannot. Your internet provider may still be blocking it (try mobile data or another network, or try Tor).']
       : ['It works elsewhere; the problem may be your network', 'No test server in your country answered, but the site opens from other countries.'];
   }
   return ['The site is up', 'It opens from the test servers. If it still fails for you, try another network or browser.'];
@@ -110,6 +110,7 @@ function guessCountry() {
   const zone = (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
   const zones = { 'Asia/Calcutta': 'IN', 'Asia/Kolkata': 'IN', 'Asia/Dubai': 'AE', 'Asia/Singapore': 'SG', 'Asia/Karachi': 'PK', 'Asia/Dhaka': 'BD', 'Asia/Colombo': 'LK', 'Europe/London': 'GB', 'Europe/Berlin': 'DE', 'Europe/Paris': 'FR', 'Asia/Tokyo': 'JP' };
   if (zones[zone]) return zones[zone];
+  if (new Date().getTimezoneOffset() === -330) return 'IN';
   const m = /-([A-Z]{2})\b/.exec((typeof navigator !== 'undefined' && navigator.language) || '');
   return m && COUNTRIES[m[1]] ? m[1] : 'US';
 }

@@ -269,15 +269,20 @@ class HostTable {
         start = i + 1;
       }
     }
-    // the file is written sorted, but sort again so that any list works
-    std::vector<uint32_t> idx(offs_.size());
-    for (size_t i = 0; i < idx.size(); i++) idx[i] = (uint32_t)i;
-    std::sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) { return view(a) < view(b); });
-    std::vector<uint32_t> o2(offs_.size());
-    std::vector<uint16_t> l2(offs_.size());
-    for (size_t i = 0; i < idx.size(); i++) { o2[i] = offs_[idx[i]]; l2[i] = lens_[idx[i]]; }
-    offs_.swap(o2);
-    lens_.swap(l2);
+    bool sorted = true;
+    for (size_t i = 1; i < offs_.size(); i++) {
+      if (view((uint32_t)i) < view((uint32_t)(i - 1))) { sorted = false; break; }
+    }
+    if (!sorted) {
+      std::vector<uint32_t> idx(offs_.size());
+      for (size_t i = 0; i < idx.size(); i++) idx[i] = (uint32_t)i;
+      std::sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) { return view(a) < view(b); });
+      std::vector<uint32_t> o2(offs_.size());
+      std::vector<uint16_t> l2(offs_.size());
+      for (size_t i = 0; i < idx.size(); i++) { o2[i] = offs_[idx[i]]; l2[i] = lens_[idx[i]]; }
+      offs_.swap(o2);
+      lens_.swap(l2);
+    }
   }
   size_t size() const { return offs_.size(); }
   bool has(std::string_view h) const {
@@ -291,14 +296,14 @@ class HostTable {
     return false;
   }
   /** The host or any parent domain of it is in the table (stops before the top-level domain). */
-  bool blocks(string h) const {
+  bool blocks(std::string_view h) const {
     if (h.empty()) return false;
     for (;;) {
       if (has(h)) return true;
       size_t dot = h.find('.');
-      if (dot == string::npos) return false;
-      h = h.substr(dot + 1);
-      if (h.find('.') == string::npos) return false;
+      if (dot == std::string_view::npos) return false;
+      h.remove_prefix(dot + 1);
+      if (h.find('.') == std::string_view::npos) return false;
     }
   }
 

@@ -41,10 +41,10 @@ object AdFilter {
     private const val UPDATE_EVERY_MS = 3L * 24 * 3600 * 1000
 
     fun init(context: Context) {
-        adHosts = load(context, "adhosts.txt")
-        trackerHosts = load(context, "trackers.txt")
         val app = context.applicationContext
         thread(name = "ad-lists", priority = Thread.MIN_PRIORITY) {
+            adHosts = load(app, "adhosts.txt")
+            trackerHosts = load(app, "trackers.txt")
             engine = buildEngine(app)
             if (System.currentTimeMillis() - Prefs.filtersUpdated > UPDATE_EVERY_MS && updateLists(app)) engine = buildEngine(app)
         }
@@ -57,7 +57,8 @@ object AdFilter {
         val started = System.currentTimeMillis()
         for (name in LISTS.keys + "extra") {
             val fresh = File(listDir(context), "$name.txt")
-            e.add(if (fresh.exists()) fresh.readLines() else context.assets.open("filters/$name.txt").bufferedReader().readLines())
+            val stream = if (fresh.exists()) fresh.inputStream() else context.assets.open("filters/$name.txt")
+            stream.bufferedReader().useLines { lines -> e.add(lines.asIterable()) }
         }
         android.util.Log.i("AdFilter", "${e.ruleCount} rules ready in ${System.currentTimeMillis() - started} ms")
         e
