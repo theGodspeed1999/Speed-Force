@@ -174,6 +174,15 @@ function start(info) {
         for (const text of [COUNTRIES[r.country] || r.country, r.city || '', mark === 'ok' ? 'Opens' : mark === 'refused' ? 'Refused (' + r.code + ')' : r.code ? 'Server error (' + r.code + ')' : 'Does not open']) {
           const td = document.createElement('td'); td.textContent = text; tr.append(td);
         }
+        const cc = (r.country || '').toLowerCase();
+        if (mark === 'ok' && info.tor && window.chrome && window.chrome.webview && TOR_COUNTRIES[cc]) {
+          const td = document.createElement('td');
+          const b = document.createElement('button');
+          b.type = 'button'; b.textContent = 'Connect';
+          b.addEventListener('click', () => window.chrome.webview.postMessage({ t: 'toropen', cc, url: target.href }));
+          td.append(b);
+          tr.append(td);
+        }
         tr.className = mark;
         $('rows').append(tr);
       }
