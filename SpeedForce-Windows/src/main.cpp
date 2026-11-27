@@ -7,6 +7,7 @@
 #include <dwmapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
+#include <wincrypt.h>
 #include <atomic>
 #include <deque>
 #include <memory>
@@ -667,6 +668,38 @@ static int runCurl(const wstring& args, string& out) {
   return ok ? (int)code : -1;
 }
 
+static string sha256File(const wstring& path) {
+  HCRYPTPROV prov = 0; HCRYPTHASH hash = 0;
+  if (!CryptAcquireContextW(&prov, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) return "";
+  if (!CryptCreateHash(prov, CALG_SHA_256, 0, 0, &hash)) { CryptReleaseContext(prov, 0); return ""; }
+  HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (f == INVALID_HANDLE_VALUE) { CryptDestroyHash(hash); CryptReleaseContext(prov, 0); return ""; }
+  BYTE buf[65536]; DWORD n = 0;
+  while (ReadFile(f, buf, sizeof buf, &n, nullptr) && n) CryptHashData(hash, buf, n, 0);
+  CloseHandle(f);
+  BYTE dig[32]; DWORD dlen = 32;
+  string out;
+  if (CryptGetHashParam(hash, HP_HASHVAL, dig, &dlen, 0)) {
+    static const char* hex = "0123456789abcdef";
+    for (DWORD i = 0; i < dlen; i++) { out += hex[dig[i] >> 4]; out += hex[dig[i] & 15]; }
+  }
+  CryptDestroyHash(hash); CryptReleaseContext(prov, 0);
+  return out;
+}
+
+static string expectedSha256(const string& sums, const string& fileName) {
+  for (auto& line : split(sums, '\n')) {
+    string t = trim(line);
+    if (t.size() > 65 && endsWith(t, fileName)) {
+      string h = lower(t.substr(0, 64));
+      bool hex = true;
+      for (char c : h) if (!isxdigit((unsigned char)c)) { hex = false; break; }
+      if (hex) return h;
+    }
+  }
+  return "";
+}
+
 static void checkAppUpdate() {
   if (g_private || !g_torCc.empty() || g_secondary) return;
 #ifdef SF_TEST
@@ -682,15 +715,24 @@ static void checkAppUpdate() {
     string tag = j.value("tag_name", "");
     if (!isNewerVersion(tag, SF_VERSION)) return;
     string ver = (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) ? tag.substr(1) : tag;
-    string dlUrl;
+    string dlUrl, sumsUrl;
     if (j.contains("assets") && j["assets"].is_array()) {
-      for (auto& a : j["assets"]) if (a.value("name", "") == "SpeedForce-Setup.exe") { dlUrl = a.value("browser_download_url", ""); break; }
+      for (auto& a : j["assets"]) {
+        string name = a.value("name", "");
+        if (name == "SpeedForce-Setup.exe") dlUrl = a.value("browser_download_url", "");
+        else if (name == "SHA256SUMS.txt") sumsUrl = a.value("browser_download_url", "");
+      }
     }
-    if (dlUrl.empty()) dlUrl = "https://github.com/theGodspeed1999/Speed-Force/releases/latest/download/SpeedForce-Setup.exe";
+    if (dlUrl.empty() || sumsUrl.empty()) return;
+    string sums;
+    if (runCurl(L"-fsSL -L -m 15 -H \"User-Agent: SpeedForce\" \"" + W(sumsUrl) + L"\"", sums) != 0) return;
+    string wantHash = expectedSha256(sums, "SpeedForce-Setup.exe");
+    if (wantHash.empty()) return;
     wstring setup = dataDir + L"\\SpeedForce-Setup.exe", tmp = setup + L".tmp";
     DeleteFileW(tmp.c_str());
     string dummy;
     if (runCurl(L"-fsSL -L -m 120 -H \"User-Agent: SpeedForce\" -o \"" + tmp + L"\" \"" + W(dlUrl) + L"\"", dummy) != 0) { DeleteFileW(tmp.c_str()); return; }
+    if (sha256File(tmp) != wantHash) { DeleteFileW(tmp.c_str()); return; }
     if (!MoveFileExW(tmp.c_str(), setup.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return; }
     postUi([ver, setup] {
       notice("Speed Force " + ver + " is ready.", {{"label", "Update & restart"}, {"updateSetup", U8(setup)}});
@@ -2290,7 +2332,7 @@ static wstring torArgs() {
 static bool startEngine() {
   // fewer engine processes and no background extras: less memory
   SetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-    wstring(g_settings.value("block3p", false) ? L"--test-third-party-cookie-phaseout " : L"").append(torArgs()).append(L"--renderer-process-limit=4 --disable-background-networking --disable-component-update --disable-sync --disable-features=msSmartScreenProtection,msEdgeShoppingAssistant,msEdgeRewards,Translate").append(g_torCc.empty() ? L"" : L",MediaRouter,DialMediaRouteProvider").append(L" --disable-breakpad --no-pings").c_str());
+    wstring(g_settings.value("block3p", false) ? L"--test-third-party-cookie-phaseout " : L"").append(torArgs()).append(L"--renderer-process-limit=4 --disable-background-networking --disable-component-update --disable-sync --disable-features=msEdgeShoppingAssistant,msEdgeRewards,Translate").append(g_torCc.empty() ? L"" : L",msSmartScreenProtection,MediaRouter,DialMediaRouteProvider").append(L" --disable-breakpad --no-pings").c_str());
   wstring udf = g_data + L"\\browser";
   typedef HRESULT(STDAPICALLTYPE * CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
   HMODULE loader = LoadLibraryW((g_exe + L"\\WebView2Loader.dll").c_str());
@@ -2319,6 +2361,28 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     g_assets = dirOf(g_exe) + L"\\assets"; g_ui = dirOf(g_exe) + L"\\ui"; g_engine = dirOf(g_exe) + L"\\engine";
   }
   makeDirs(g_data);
+  {
+    WIN32_FIND_DATAW fd{};
+    HANDLE fh = FindFirstFileW((g_data + L"\\private-*").c_str(), &fd);
+    if (fh != INVALID_HANDLE_VALUE) {
+      do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcslen(fd.cFileName) > 8) {
+          DWORD pid = (DWORD)_wtoi(fd.cFileName + 8);
+          HANDLE hp = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr;
+          DWORD ec = 0;
+          bool alive = hp && GetExitCodeProcess(hp, &ec) && ec == STILL_ACTIVE;
+          if (hp) CloseHandle(hp);
+          if (!alive) {
+            wstring cmd = L"cmd.exe /c rmdir /s /q \"" + g_data + L"\\" + fd.cFileName + L"\"";
+            STARTUPINFOW si{sizeof si}; si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+            PROCESS_INFORMATION pi{};
+            if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+          }
+        }
+      } while (FindNextFileW(fh, &fd));
+      FindClose(fh);
+    }
+  }
   // one window only: a second start hands its address to the first
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
