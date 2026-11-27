@@ -670,7 +670,8 @@ static int runCurl(const wstring& args, string& out) {
 static void checkAppUpdate() {
   if (g_private || !g_torCc.empty() || g_secondary) return;
 #ifdef SF_TEST
-  if (!g_testPrefix.empty()) return;
+  wchar_t shotBuf[4] = {};
+  if (GetEnvironmentVariableW(L"SF_SHOT", shotBuf, 4)) return;
 #endif
   wstring dataDir = g_data;
   std::thread([dataDir] {
