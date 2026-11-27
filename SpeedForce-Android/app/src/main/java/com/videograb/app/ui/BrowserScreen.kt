@@ -233,17 +233,6 @@ fun BrowserScreen(activity: MainActivity) {
                     onOpen = { tab.load(it) },
                 )
             }
-            val found = tab.videoCount + tab.streams.size
-            if (found > 0 && !tab.isStart) {
-                ExtendedFloatingActionButton(
-                    onClick = { activity.openPickerForCurrentPage() },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-                ) {
-                    Text("⬇ Download" + if (tab.streams.isNotEmpty()) " (${tab.streams.size})" else "")
-                }
-            }
             val popup = activity.blockedPopup
             if (popup != null) {
                 LaunchedEffect(popup) { delay(6000); if (activity.blockedPopup == popup) activity.blockedPopup = null }

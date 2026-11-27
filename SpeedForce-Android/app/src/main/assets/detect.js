@@ -905,6 +905,9 @@
       var s = srcOf(v);
       if (/^https?:/i.test(s)) reportStream(s);
       v.addEventListener('loadedmetadata', function () { var u = srcOf(this); if (/^https?:/i.test(u)) reportStream(u); });
+      v.addEventListener('play', place);
+      v.addEventListener('pause', place);
+      v.addEventListener('ended', place);
     }
     if (tracked.length !== lastCount) {
       lastCount = tracked.length;
@@ -934,7 +937,8 @@
         continue;
       }
       var r = v.getBoundingClientRect();
-      var visible = r.width >= 80 && r.height >= 50 && r.bottom > 0 && r.right > 0 && r.top < H && r.left < W;
+      var playing = !v.paused && !v.ended && v.readyState > 0;
+      var visible = playing && r.width >= 80 && r.height >= 50 && r.bottom > 0 && r.right > 0 && r.top < H && r.left < W;
       todo.push([v.__vgButton, visible, Math.max(4, r.top + 8) + 'px', Math.max(4, r.left + 8) + 'px']);
     }
     for (i = 0; i < todo.length; i++) {
