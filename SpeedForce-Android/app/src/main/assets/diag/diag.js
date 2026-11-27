@@ -57,6 +57,55 @@ function conclude(local, rows, home) {
 
 const COUNTRIES = { IN: 'India', US: 'United States', GB: 'United Kingdom', DE: 'Germany', SG: 'Singapore', AE: 'United Arab Emirates', AU: 'Australia', CA: 'Canada', FR: 'France', JP: 'Japan', BR: 'Brazil', RU: 'Russia', CN: 'China', PK: 'Pakistan', BD: 'Bangladesh', LK: 'Sri Lanka', ID: 'Indonesia', TR: 'Turkey', SA: 'Saudi Arabia' };
 
+const TOR_COUNTRIES = { nl: 'Netherlands', de: 'Germany', us: 'United States', gb: 'United Kingdom', fr: 'France' };
+
+/** What a try through Tor means. code is the site's answer, 0 when nothing came back. */
+function torRate(code) {
+  if (!code) return ['fail', 'Did not open through Tor', false];
+  if (code === 401 || code === 403 || code === 429 || code === 451) return ['refused', 'Refused (' + code + '): the site may refuse Tor', false];
+  if (code >= 500) return ['fail', 'Server error (' + code + ')', false];
+  if (code >= 400) return ['refused', 'Answered, page not found (' + code + ')', true];
+  return ['ok', 'Works', true];
+}
+
+/** The "Try other countries" part: only the Windows app can carry it out. */
+function startTor(target) {
+  const $ = id => document.getElementById(id);
+  const host = window.chrome.webview;
+  $('torcard').hidden = false;
+  $('tor').addEventListener('click', () => {
+    $('tor').disabled = true;
+    $('tor-rows').replaceChildren();
+    $('tor-status').textContent = 'Starting…';
+    host.postMessage({ t: 'torcheck', host: target.hostname });
+  });
+  host.addEventListener('message', e => {
+    const m = e.data;
+    if (!m || !m.tor) return;
+    if (m.tor === 'status') $('tor-status').textContent = m.cc ? 'Trying ' + TOR_COUNTRIES[m.cc] + '…' : m.text;
+    else if (m.tor === 'error') { $('tor-status').textContent = m.text; $('tor').disabled = false; }
+    else if (m.tor === 'done') {
+      $('tor-status').textContent = $('tor-rows').querySelector('button') ? 'Done. Press Open to see the site in a separate Tor window.' : 'Done. The site did not open through any of these countries.';
+      $('tor').disabled = false;
+    } else if (m.tor === 'row' && TOR_COUNTRIES[m.cc]) {
+      const [mark, text, canOpen] = torRate(m.code);
+      const tr = document.createElement('tr');
+      tr.className = mark;
+      const name = document.createElement('td'); name.textContent = TOR_COUNTRIES[m.cc];
+      const act = document.createElement('td');
+      if (canOpen) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.textContent = 'Open';
+        b.addEventListener('click', () => host.postMessage({ t: 'toropen', cc: m.cc, url: target.href }));
+        act.append(b);
+      }
+      const what = document.createElement('td'); what.textContent = text;
+      tr.append(name, act, what);
+      $('tor-rows').append(tr);
+    }
+  });
+}
+
 function guessCountry() {
   const zone = (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
   const zones = { 'Asia/Calcutta': 'IN', 'Asia/Kolkata': 'IN', 'Asia/Dubai': 'AE', 'Asia/Singapore': 'SG', 'Asia/Karachi': 'PK', 'Asia/Dhaka': 'BD', 'Asia/Colombo': 'LK', 'Europe/London': 'GB', 'Europe/Berlin': 'DE', 'Europe/Paris': 'FR', 'Asia/Tokyo': 'JP' };
@@ -100,6 +149,7 @@ function start(info) {
   const show = () => { $('title').textContent = LOCAL[local][0]; $('why').textContent = LOCAL[local][1]; };
   show();
   $('host').textContent = target.hostname;
+  if (info.tor && window.chrome && window.chrome.webview) startTor(target);
   online().then(up => { if (!up) { local = 'offline'; show(); } });
   const home = guessCountry();
   for (const [code, name] of Object.entries(COUNTRIES)) {
@@ -137,8 +187,8 @@ function start(info) {
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { conclude, rate, localKind };
+if (typeof module !== 'undefined') module.exports = { conclude, rate, localKind, torRate };
 if (typeof document !== 'undefined') {
   const q = new URLSearchParams(location.search);
-  start(window.SF_DIAG || { url: q.get('u') || '', kind: q.get('k') || '', status: q.get('s') || 0 });
+  start(window.SF_DIAG || { url: q.get('u') || '', kind: q.get('k') || '', status: q.get('s') || 0, tor: q.get('tor') === '1' });
 }

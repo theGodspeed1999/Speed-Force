@@ -1,6 +1,7 @@
 // Speed Force (C++): a small Windows browser on the WebView2 engine that is already part of Windows.
 // Window and tabs are native; the toolbar and side panels are one light web page (ui\). Ads and trackers
 // are stopped here, in C++, before a page can load them. Videos and files download from here too.
+#include <winsock2.h>  // must come before windows.h
 #include "util.h"
 #include <shellapi.h>
 #include <dwmapi.h>
@@ -11,8 +12,10 @@
 #include <memory>
 #include <thread>
 #include "WebView2.h"
+#include "tor.h"
 
 #define APP_NAME L"Speed Force"
+#define SF_VERSION "1.5.0"
 static const char* kStartUrl = "https://sf.start/";
 // The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
 static const char* kLensUrl = "https://lens.google.com/speedforce/";
@@ -135,7 +138,10 @@ static void postUi(std::function<void()> f) {
 
 // ---------------------------------------------------------------- windows and engine options
 static bool g_private = false;    // this window is a private window: own empty profile, deleted on exit
-static bool g_secondary = false;  // an extra normal window: shares the profile, does not own the saved tabs
+static bool g_secondary = false;
+static string g_torCc;             // set in a Tor window: the exit country asked for
+static tor::Process g_tor;          // in a Tor window: its own tor; otherwise only runs during a country check
+static std::atomic<bool> g_torBusy{false};  // an extra normal window: shares the profile, does not own the saved tabs
 static wstring g_exeFile;
 
 // engine options: only needed to switch browser extensions on
@@ -566,8 +572,129 @@ static void guardAtStart() {
     if (!open) guardClean(h);
   }
 }
+static bool torInstalled();
 static string diagUrl(const string& page, const string& kind, int status) {
-  return string(kDiagUrl) + "?u=" + urlEncode(page) + "&k=" + kind + "&s=" + std::to_string(status);
+  return string(kDiagUrl) + "?u=" + urlEncode(page) + "&k=" + kind + "&s=" + std::to_string(status) + (g_torCc.empty() && torInstalled() ? "&tor=1" : "");
+}
+
+/** A plain host name: nothing that could change the meaning of a command line. */
+static bool plainHost(const string& h) {
+  if (h.empty() || h.size() > 253 || h[0] == '-' || h.find('.') == string::npos) return false;
+  for (char c : h) if (!(isalnum((unsigned char)c) || c == '.' || c == '-')) return false;
+  return true;
+}
+static bool torInstalled() { return fileExists(g_exe + L"\\tor\\tor\\tor.exe"); }
+static void tellTab(int tabId, const json& m) {
+  for (auto& x : g_tabs) if (x->id == tabId && x->wv && startsWith(x->url, kDiagUrl)) x->wv->PostWebMessageAsJson(W(m.dump()).c_str());
+}
+/** "Try other countries through Tor": one tor, one country after another; each answer is shown as it arrives. */
+static void torCheck(int tabId, const string& host) {
+  if (!g_torCc.empty() || !plainHost(host)) return;
+  if (g_torBusy.exchange(true)) { tellTab(tabId, {{"tor", "error"}, {"text", "A Tor check is already running."}}); return; }
+  wstring torDir = g_exe + L"\\tor", data = g_data + L"\\tor-check";
+  makeDirs(data);
+  std::thread([=] {
+    auto say = [tabId](json m) { postUi([tabId, m] { tellTab(tabId, m); }); };
+    say({{"tor", "status"}, {"text", "Connecting to Tor… the first time can take a minute."}});
+    string err;
+    if (!g_tor.start(torDir, data, "", 120, err)) say({{"tor", "error"}, {"text", err}});
+    else {
+      for (const char* cc : tor::kCountries) {
+        say({{"tor", "status"}, {"text", "Trying the site…"}, {"cc", cc}});
+        int code = g_tor.setExit(cc) ? tor::fetch(g_tor.socks, host, string("sf") + cc) : 0;
+        if (!code && g_tor.setExit(cc)) code = tor::fetch(g_tor.socks, host, string("sf2") + cc);  // one more circuit
+        say({{"tor", "row"}, {"cc", cc}, {"code", code}});
+      }
+      say({{"tor", "done"}});
+      g_tor.stop();  // nothing keeps running (and using memory) after the check
+    }
+    g_torBusy = false;
+  }).detach();
+}
+/** Opens the site in its own Tor window; this window and its tabs stay on the direct connection. */
+static void torOpen(const string& cc, string url) {
+  if (!g_torCc.empty() || !tor::knownCountry(cc) || !isHttp(url)) return;
+  if (startsWith(url, "http:")) url = "https:" + url.substr(5);
+  for (char c : url) if (c == '"' || c == '\\' || (unsigned char)c <= 32) return;
+  launchSelf((L"--tor=" + W(cc) + L" \"" + W(url) + L"\"").c_str());
+}
+
+/** True when [remoteTag] (e.g. "v1.5.1") is strictly newer than [localVer] (e.g. "1.5.0"). */
+static bool isNewerVersion(const string& remoteTag, const string& localVer) {
+  auto parse = [](string s) {
+    if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) s = s.substr(1);
+    auto dash = s.find('-'); if (dash != string::npos) s = s.substr(0, dash);
+    std::vector<int> out;
+    for (auto& p : split(s, '.')) out.push_back(atoi(p.c_str()));
+    return out;
+  };
+  auto r = parse(remoteTag), l = parse(localVer);
+  if (r.empty()) return false;
+  size_t n = std::max(r.size(), l.size());
+  for (size_t i = 0; i < n; i++) {
+    int rv = i < r.size() ? r[i] : 0, lv = i < l.size() ? l[i] : 0;
+    if (rv != lv) return rv > lv;
+  }
+  return false;
+}
+
+static int runCurl(const wstring& args, string& out) {
+  wchar_t sys[MAX_PATH];
+  GetSystemDirectoryW(sys, MAX_PATH);
+  wstring cmd = L"\"" + wstring(sys) + L"\\curl.exe\" " + args;
+  SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+  HANDLE read = nullptr, write = nullptr;
+  if (!CreatePipe(&read, &write, &sa, 0)) return -1;
+  SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
+  STARTUPINFOW si{sizeof si};
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdOutput = write;
+  PROCESS_INFORMATION pi{};
+  BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+  CloseHandle(write);
+  out.clear();
+  DWORD code = 1;
+  if (ok) {
+    char b[4096];
+    DWORD n = 0;
+    while (ReadFile(read, b, sizeof b, &n, nullptr) && n) out.append(b, n);
+    WaitForSingleObject(pi.hProcess, 150000);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+  }
+  CloseHandle(read);
+  return ok ? (int)code : -1;
+}
+
+static void checkAppUpdate() {
+  if (g_private || !g_torCc.empty() || g_secondary) return;
+#ifdef SF_TEST
+  if (!g_testPrefix.empty()) return;
+#endif
+  wstring dataDir = g_data;
+  std::thread([dataDir] {
+    string body;
+    if (runCurl(L"-fsSL -m 15 -H \"User-Agent: SpeedForce\" \"https://api.github.com/repos/theGodspeed1999/Speed-Force/releases/latest\"", body) != 0) return;
+    json j = json::parse(body, nullptr, false);
+    if (!j.is_object()) return;
+    string tag = j.value("tag_name", "");
+    if (!isNewerVersion(tag, SF_VERSION)) return;
+    string ver = (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) ? tag.substr(1) : tag;
+    string dlUrl;
+    if (j.contains("assets") && j["assets"].is_array()) {
+      for (auto& a : j["assets"]) if (a.value("name", "") == "SpeedForce-Setup.exe") { dlUrl = a.value("browser_download_url", ""); break; }
+    }
+    if (dlUrl.empty()) dlUrl = "https://github.com/theGodspeed1999/Speed-Force/releases/latest/download/SpeedForce-Setup.exe";
+    wstring setup = dataDir + L"\\SpeedForce-Setup.exe", tmp = setup + L".tmp";
+    DeleteFileW(tmp.c_str());
+    string dummy;
+    if (runCurl(L"-fsSL -L -m 120 -H \"User-Agent: SpeedForce\" -o \"" + tmp + L"\" \"" + W(dlUrl) + L"\"", dummy) != 0) { DeleteFileW(tmp.c_str()); return; }
+    if (!MoveFileExW(tmp.c_str(), setup.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return; }
+    postUi([ver, setup] {
+      notice("Speed Force " + ver + " is ready.", {{"label", "Update & restart"}, {"updateSetup", U8(setup)}});
+    });
+  }).detach();
 }
 
 static void closeTab(Tab* t) {
@@ -678,6 +805,10 @@ struct RunResult { int code = -1; string out, err; };
 /** Runs a program with hidden window; [onLine] gets each output line (on the UI thread); [done] gets the result (UI thread). */
 static void runProcess(const wstring& cmdline, std::vector<std::pair<wstring, wstring>> env, std::function<void(const string&)> onLine,
                        std::function<void(RunResult)> done, std::function<void(HANDLE, HANDLE)> started = nullptr) {
+  if (!g_torCc.empty()) {  // the download engine connects by itself, which would go around Tor
+    postUi([done] { RunResult r; r.err = "Downloads are switched off in a Tor window."; done(r); });
+    return;
+  }
   std::thread([=]() {
     RunResult rr;
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
@@ -982,6 +1113,7 @@ static void dlAction(const string& action, const string& id) {
 
 /** A file the page offered (any type): saved to the Files folder and listed with the videos. */
 static void onDownloadStarting(Tab* t, ICoreWebView2DownloadStartingEventArgs* args) {
+  if (!g_torCc.empty()) { args->put_Cancel(TRUE); args->put_Handled(TRUE); notice("Downloads are switched off in a Tor window."); return; }
   Com<ICoreWebView2DownloadOperation> op;
   args->get_DownloadOperation(op.put());
   CoStr uri, pathOld;
@@ -1148,6 +1280,7 @@ static void wireTab(Tab* t) {
     string l = lower(u.substr(0, 8));
     if (!(startsWith(l, "http") || startsWith(l, "about:") || startsWith(l, "data:") || startsWith(l, "blob:") || startsWith(l, "file:"))) { a->put_Cancel(TRUE); return S_OK; }
     if (!isHttp(u)) return S_OK;
+    if (!g_torCc.empty() && startsWith(u, "http:")) { a->put_Cancel(TRUE); notice("A Tor window opens secure (https) pages only: the exit could read and change anything else."); return S_OK; }
     t->lastNav = u;
     t->lastStatus = 0;
     if (t->wv) {  // "Block scripts" for this site (takes effect for the page now being opened)
@@ -1204,7 +1337,7 @@ static void wireTab(Tab* t) {
       string h = hostOf(u);
       if (startsWith(u, "https:") && !h.empty() && es != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED && es != COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED) {
         bool wasUpgraded = t->upgraded.erase(h) > 0;
-        if (wasUpgraded && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED) {
+        if (g_torCc.empty() && wasUpgraded && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID && es != COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED) {
           // we added the https ourselves and the site has no working https: use the page as the link first gave it, and say so
           g_httpAllowed.insert(h);
           notice(h + " has no working https, so this page opened over insecure http.", nullptr);
@@ -1336,6 +1469,12 @@ static void wireTab(Tab* t) {
       // the start page asks for its numbers as a JSON object
       CoStr js; a->get_WebMessageAsJson(js.put());
       auto q = json::parse(js.str(), nullptr, false);
+      // only our own diagnostic page, shown as the tab itself, may start Tor
+      if (q.is_object() && startsWith(from, kDiagUrl) && startsWith(t->url, kDiagUrl)) {
+        string what = q.value("t", "");
+        if (what == "torcheck") { torCheck(t->id, q.value("host", "")); return S_OK; }
+        if (what == "toropen") { torOpen(q.value("cc", ""), q.value("url", "")); return S_OK; }
+      }
       if (q.is_object() && q.value("t", "") == "startdata" && isStart(from) && isStart(t->url)) {
         json sites = json::array();
         std::map<string, std::pair<int, string>> cnt;
@@ -1594,13 +1733,13 @@ static void menuAction(int cmd) {
       }
       break;
     case 122: if (t && t->wv) t->wv->OpenDevToolsWindow(); break;
-    case 123: launchSelf(L"--window"); break;
+    case 123: if (g_torCc.empty()) launchSelf(L"--window"); else notice("Open new windows from your normal Speed Force window."); break;
     case 127: newTab(kLensUrl); break;
     case 128:
       if (t && isHttp(t->url) && !isStart(t->url) && hostOf(t->url) != "sf.diag") newTab(diagUrl(t->url, "", t->lastStatus));
       else notice("Open the page that does not load, then use this.", nullptr);
       break;
-    case 124: launchSelf(L"--private"); break;
+    case 124: if (g_torCc.empty()) launchSelf(L"--private"); else notice("Open new windows from your normal Speed Force window."); break;
     case 126:
       g_settings["savePasswords"] = !g_settings.value("savePasswords", false);
       saveSettings();
@@ -1707,6 +1846,20 @@ static void handleUi(const json& m) {
     else if (x.contains("show")) { wstring p = W(x["show"].get<string>()); SHELLEXECUTEINFOW sei{sizeof sei}; wstring arg = L"/select,\"" + p + L"\""; ShellExecuteW(nullptr, L"open", L"explorer.exe", arg.c_str(), nullptr, SW_SHOW); }
     else if (x.contains("url") && x.contains("tab")) { if (tt) loadTab(tt, x["url"]); }
     else if (x.contains("url")) newTab(x["url"]);
+    else if (x.contains("updateSetup")) {
+      wstring setup = W(x["updateSetup"].get<string>());
+      if (fileExists(setup)) {
+        wstring bat = g_data + L"\\sf-update.cmd";
+        writeFile(bat, "@echo off\r\nping -n 3 127.0.0.1 >nul\r\n\"" + U8(setup) + "\" /S /D=" + U8(g_exe) + "\r\nstart \"\" \"" + U8(g_exeFile) + "\"\r\ndel \"%~f0\"\r\n");
+        wstring cmd = L"cmd.exe /c \"" + bat + L"\"";
+        STARTUPINFOW si{sizeof si}; si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+          CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+          PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
+        }
+      }
+    }
     ret();
   }
   else if (c == "popup") { json x = A(1); showPopup(A(0).get<string>(), x.value("l", 0.0), x.value("r", 0.0), x.value("b", 0.0)); ret(); }
@@ -1874,8 +2027,8 @@ static void handleKey(const string& cmd) {
   else if (cmd == "bookmark") { json m = {{"cmd", "toggleBookmark"}, {"args", json::array()}}; handleUi(m); }
   else if (cmd == "fullscreen") setFullscreen(!g_fullscreen);
   else if (cmd == "unfull") setFullscreen(false);
-  else if (cmd == "newwindow") launchSelf(L"--window");
-  else if (cmd == "newprivate") launchSelf(L"--private");
+  else if (cmd == "newwindow" && g_torCc.empty()) launchSelf(L"--window");
+  else if (cmd == "newprivate" && g_torCc.empty()) launchSelf(L"--private");
   else if (cmd == "back") { if (t) goBack(t); }
   else if (cmd == "forward") { if (t && t->wv) t->wv->GoForward(); }
   else if (cmd == "nexttab" || cmd == "prevtab") {
@@ -2127,6 +2280,32 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 
+/** Extra engine switches of a Tor window: everything goes to Tor, and nothing may look names up or connect around it. */
+static wstring torArgs() {
+  if (g_torCc.empty()) return L"";
+  return L"--proxy-server=socks5://127.0.0.1:" + std::to_wstring(g_tor.socks) +
+         L" --host-resolver-rules=\"MAP * ~NOTFOUND , EXCLUDE 127.0.0.1\" --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-quic --dns-prefetch-disable ";
+}
+static bool startEngine() {
+  // fewer engine processes and no background extras: less memory
+  SetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+    wstring(g_settings.value("block3p", false) ? L"--test-third-party-cookie-phaseout " : L"").append(torArgs()).append(L"--renderer-process-limit=4 --disable-background-networking --disable-component-update --disable-sync --disable-features=msSmartScreenProtection,msEdgeShoppingAssistant,msEdgeRewards,Translate").append(g_torCc.empty() ? L"" : L",MediaRouter,DialMediaRouteProvider").append(L" --disable-breakpad --no-pings").c_str());
+  wstring udf = g_data + L"\\browser";
+  typedef HRESULT(STDAPICALLTYPE * CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
+  HMODULE loader = LoadLibraryW((g_exe + L"\\WebView2Loader.dll").c_str());
+  CreateEnvFn createEnv = loader ? (CreateEnvFn)GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions") : nullptr;
+  if (!createEnv) { MessageBoxW(nullptr, L"WebView2Loader.dll is missing.", APP_NAME, MB_ICONERROR); return false; }
+  HRESULT hr = createEnv(nullptr, udf.c_str(), g_private ? nullptr : new SfOptions, H2(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, HRESULT, ICoreWebView2Environment*, ([](HRESULT hr, ICoreWebView2Environment* e) -> HRESULT {
+    if (FAILED(hr) || !e) { MessageBoxW(g_hwnd, L"The Windows web engine (WebView2) is not installed or could not start.", APP_NAME, MB_ICONERROR); PostQuitMessage(1); return S_OK; }
+    g_env = e;
+    createUi();
+    return S_OK;
+  })));
+  if (FAILED(hr)) { MessageBoxW(g_hwnd, L"The Windows web engine (WebView2) is not installed.", APP_NAME, MB_ICONERROR); return false; }
+
+  return true;
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -2147,6 +2326,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     if (isHttp(a)) g_argUrl = a;
     else if (a == "--private") g_private = true;
     else if (a == "--window") g_secondary = true;
+    else if (a.size() == 8 && startsWith(a, "--tor=") && tor::knownCountry(a.substr(6))) { g_torCc = a.substr(6); g_private = true; }
   }
   { wchar_t buf[MAX_PATH]; GetModuleFileNameW(nullptr, buf, MAX_PATH); g_exeFile = buf; }
   wstring mainData = g_data;
@@ -2169,6 +2349,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     g_settings["restoreTabs"] = false;
     g_settings["savePasswords"] = false;
     g_settings["extensions"] = json::array();
+    if (!g_torCc.empty()) { g_settings["httpsOnly"] = true; g_settings["home"] = kStartUrl; g_settings["antiFinger"] = true; g_settings["savePasswords"] = false; }
   }
   g_stats = readJson(g_data + L"\\stats.json", g_stats);
   g_adHosts.load(g_assets + L"\\adhosts.txt");
@@ -2185,12 +2366,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
   }
 
   WNDCLASSW wc{};
-  wc.lpfnWndProc = WndProc; wc.hInstance = inst; wc.lpszClassName = L"SpeedForceWnd";
+  wc.lpfnWndProc = WndProc; wc.hInstance = inst; wc.lpszClassName = g_torCc.empty() ? L"SpeedForceWnd" : L"SpeedForceTorWnd";
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
   wc.hbrBackground = CreateSolidBrush(RGB(27, 28, 34));
   RegisterClassW(&wc);
-  g_hwnd = CreateWindowExW(0, L"SpeedForceWnd", g_private ? L"Speed Force (Private)" : APP_NAME, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 840, nullptr, nullptr, inst, nullptr);
+  g_hwnd = CreateWindowExW(0, wc.lpszClassName, !g_torCc.empty() ? L"Speed Force (Tor)" : g_private ? L"Speed Force (Private)" : APP_NAME, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 840, nullptr, nullptr, inst, nullptr);
   { COLORREF none = 0xFFFFFFFE; DwmSetWindowAttribute(g_hwnd, 34, &none, sizeof none); }
   SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
   ShowWindow(g_hwnd, show);
@@ -2209,21 +2390,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
   }
 
 #endif
-  // fewer engine processes and no background extras: less memory
-  SetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-    wstring(g_settings.value("block3p", false) ? L"--test-third-party-cookie-phaseout " : L"").append(L"--renderer-process-limit=4 --disable-background-networking --disable-component-update --disable-sync --disable-features=msSmartScreenProtection,msEdgeShoppingAssistant,msEdgeRewards,Translate --disable-breakpad --no-pings").c_str());
-  wstring udf = g_data + L"\\browser";
-  typedef HRESULT(STDAPICALLTYPE * CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
-  HMODULE loader = LoadLibraryW((g_exe + L"\\WebView2Loader.dll").c_str());
-  CreateEnvFn createEnv = loader ? (CreateEnvFn)GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions") : nullptr;
-  if (!createEnv) { MessageBoxW(nullptr, L"WebView2Loader.dll is missing.", APP_NAME, MB_ICONERROR); return 1; }
-  HRESULT hr = createEnv(nullptr, udf.c_str(), g_private ? nullptr : new SfOptions, H2(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, HRESULT, ICoreWebView2Environment*, ([](HRESULT hr, ICoreWebView2Environment* e) -> HRESULT {
-    if (FAILED(hr) || !e) { MessageBoxW(g_hwnd, L"The Windows web engine (WebView2) is not installed or could not start.", APP_NAME, MB_ICONERROR); PostQuitMessage(1); return S_OK; }
-    g_env = e;
-    createUi();
-    return S_OK;
-  })));
-  if (FAILED(hr)) { MessageBoxW(g_hwnd, L"The Windows web engine (WebView2) is not installed.", APP_NAME, MB_ICONERROR); return 1; }
+  if (g_torCc.empty()) { if (!startEngine()) return 1; checkAppUpdate(); }
+  else {  // connect to Tor first: the web engine is only started once it can go through it
+    wstring torDir = g_exe + L"\\tor", data = g_data + L"\\tor";
+    makeDirs(data);
+    std::thread([torDir, data] {
+      string err;
+      bool ok = g_tor.start(torDir, data, g_torCc, 150, err);
+      postUi([ok, err] {
+        if (!ok) { MessageBoxW(g_hwnd, W(err).c_str(), L"Speed Force (Tor)", MB_ICONERROR); DestroyWindow(g_hwnd); }
+        else if (!startEngine()) DestroyWindow(g_hwnd);
+      });
+    }).detach();
+  }
 
   MSG msg;
   while (GetMessageW(&msg, nullptr, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }

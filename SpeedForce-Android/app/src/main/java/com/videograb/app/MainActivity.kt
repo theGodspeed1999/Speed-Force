@@ -89,6 +89,8 @@ class MainActivity : ComponentActivity(), TabListener {
 
     /** Set when the phone's web engine is out of date (warned at most once a day). */
     private var webViewWarning by mutableStateOf<WebViewHealth.Status?>(null)
+    /** Set when a newer Speed Force APK has been downloaded from GitHub. */
+    private var appUpdateReady by mutableStateOf<com.videograb.app.browser.AppUpdate.Ready?>(null)
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
@@ -157,6 +159,9 @@ class MainActivity : ComponentActivity(), TabListener {
                 webViewWarning = s
             }
         }
+        lifecycleScope.launch {
+            appUpdateReady = com.videograb.app.browser.AppUpdate.checkAndDownload(applicationContext)
+        }
 
         setContent {
             VideoGrabTheme(themeMode) {
@@ -206,6 +211,20 @@ class MainActivity : ComponentActivity(), TabListener {
                                 }
                             },
                             dismissButton = { TextButton({ webViewWarning = null }) { Text("Later") } },
+                        )
+                    }
+                    appUpdateReady?.let { upd ->
+                        AlertDialog(
+                            onDismissRequest = { appUpdateReady = null },
+                            title = { Text("Update ready") },
+                            text = { Text("Speed Force ${upd.version} has been downloaded from GitHub. Install it now to update?") },
+                            confirmButton = {
+                                TextButton({
+                                    appUpdateReady = null
+                                    com.videograb.app.browser.AppUpdate.install(this@MainActivity, upd.apk)
+                                }) { Text("Install") }
+                            },
+                            dismissButton = { TextButton({ appUpdateReady = null }) { Text("Later") } },
                         )
                     }
                     insecurePrompt?.let { (tab, httpUrl) ->

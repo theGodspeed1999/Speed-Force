@@ -5,6 +5,7 @@ Speed Force uses these projects. Each keeps its own licence; follow the links fo
 | Part | Used in | Licence | Source |
 |---|---|---|---|
 | youtubedl-android | Android app | GPL-3.0 | https://github.com/yausername/youtubedl-android |
+| Tor (tor.exe, Tor Expert Bundle 16.0.3) | Windows app | BSD-3-Clause; bundled libraries keep their own licences (see tor\docs) | https://www.torproject.org |
 | yt-dlp | Android and Windows | Unlicense | https://github.com/yt-dlp/yt-dlp |
 | FFmpeg | Android and Windows | LGPL / GPL, depending on the build | https://ffmpeg.org/legal.html |
 | aria2 | Android app | GPL-2.0 | https://github.com/aria2/aria2 |
