@@ -26,7 +26,7 @@ android {
         versionCode = Duration.between(
             ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneId.of("UTC")), now
         ).toMinutes().toInt()
-        versionName = "1.5.1 (" + now.withZoneSameInstant(ZoneId.systemDefault())
+        versionName = "1.5.2 (" + now.withZoneSameInstant(ZoneId.systemDefault())
             .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) + ")"
     }
 

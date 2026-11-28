@@ -122,7 +122,10 @@ fun BrowserScreen(activity: MainActivity) {
     var shieldsVersion by remember { mutableIntStateOf(0) }
     var bookmarkVersion by remember { mutableIntStateOf(0) }
 
-    BackHandler(enabled = tab.canGoBack) { tab.goBack() }
+    val canBack = tab.canGoBack || tabs.hasOpener(tab)
+    BackHandler(enabled = canBack) {
+        if (tab.canGoBack) tab.goBack() else tabs.backToOpener(tab, Prefs.homePage)
+    }
 
     val host = if (tab.isStart) "" else UrlUtils.host(tab.url)?.removePrefix("www.") ?: ""
     val shieldsDown = remember(tab.url, shieldsVersion) { Prefs.shieldsDown(host) }
@@ -262,7 +265,7 @@ fun BrowserScreen(activity: MainActivity) {
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).height(52.dp),
             horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton({ tab.goBack() }, enabled = tab.canGoBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            IconButton({ if (tab.canGoBack) tab.goBack() else tabs.backToOpener(tab, Prefs.homePage) }, enabled = canBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             IconButton({ tab.webView.goForward() }, enabled = tab.canGoForward && !tab.isStart) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward") }
             IconButton({ tabs.newTab(Prefs.homePage); focus.clearFocus() }) { Icon(Icons.Filled.Add, "New tab") }
             IconButton({ showTabs = true }) { TabCountBox(tabs.tabs.size) }

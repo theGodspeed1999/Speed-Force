@@ -82,6 +82,20 @@ class TabManager(private val context: Context, private val listener: TabListener
     /** Addresses of all open tabs (for reopening them next time). */
     fun urls(): List<String> = tabs.map { it.pendingUrl ?: it.url }
 
+    fun hasOpener(tab: BrowserTab): Boolean = tab.openerId?.let { id -> tabs.any { it.id == id } } == true
+
+    fun backToOpener(tab: BrowserTab, homeUrl: String) {
+        val openerIdx = tab.openerId?.let { id -> tabs.indexOfFirst { it.id == id } } ?: -1
+        val idx = tabs.indexOf(tab)
+        if (idx < 0) return
+        if (openerIdx >= 0) {
+            currentIndex = openerIdx
+            tabs[openerIdx].resume()
+            tabs[openerIdx].loadPending()
+        }
+        close(idx, homeUrl)
+    }
+
     fun close(index: Int, homeUrl: String) {
         if (index !in tabs.indices) return
         val closing = tabs.removeAt(index)

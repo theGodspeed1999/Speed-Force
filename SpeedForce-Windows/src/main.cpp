@@ -16,7 +16,7 @@
 #include "tor.h"
 
 #define APP_NAME L"Speed Force"
-#define SF_VERSION "1.5.1"
+#define SF_VERSION "1.5.2"
 static const char* kStartUrl = "https://sf.start/";
 // The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
 static const char* kLensUrl = "https://lens.google.com/speedforce/";
@@ -88,6 +88,7 @@ struct Tab {
   std::set<string> seen, upgraded;
   ULONGLONG lastGesture = 0, lastBack = 0, lastPopup = 0, finished = 0, lastVideoTap = 0, hiddenSince = 0;
   bool canBack = false, canFwd = false;
+  int openerId = 0;
   double zoom = 1.0;
   EventRegistrationToken resTok{}, msgTok{};
 };
@@ -261,6 +262,7 @@ static void pushState() {
   g_statePending = true;
   SetTimer(g_hwnd, 1, 30, nullptr);
 }
+static Tab* tabById(int id);
 static void doPushState() {
   g_statePending = false;
   json tabs = json::array();
@@ -271,7 +273,7 @@ static void doPushState() {
     string q = searchQueryOf(t->url);
     int streams = (int)t->streams.size();
     s["cur"] = {{"url", st ? "" : t->url}, {"start", st}, {"host", st ? "" : siteOf(t->url)}, {"blocked", t->blocked}, {"hidden", t->hidden},
-                {"shieldsDown", shieldsDown(t)}, {"bookmarked", isBookmarked(t->url)}, {"canBack", t->canBack}, {"canFwd", t->canFwd},
+                {"shieldsDown", shieldsDown(t)}, {"bookmarked", isBookmarked(t->url)}, {"canBack", t->canBack || (t->openerId && tabById(t->openerId) != nullptr)}, {"canFwd", t->canFwd},
                 {"loading", t->loading}, {"insecure", startsWith(t->url, "http:")}, {"videos", t->videoCount}, {"streams", streams},
                 {"search", q.empty() ? json(nullptr) : json(q)}, {"zoom", (int)(t->zoom * 100 + 0.5)}};
   }
@@ -779,7 +781,27 @@ static void resetPage(Tab* t) {
 
 static void goBack(Tab* t) {
   t->lastBack = nowMs();
-  if (t->wv) t->wv->GoBack();
+  if (t->canBack && t->wv) { t->wv->GoBack(); return; }
+  if (t->openerId) {
+    if (Tab* op = tabById(t->openerId)) {
+      selectTab(op);
+      closeTab(t);
+    }
+  }
+}
+
+static void openInstalledApp(const string& u) {
+  if (!g_torCc.empty()) return;
+  size_t col = u.find(':');
+  if (col == string::npos || col == 0 || col > 24) return;
+  string scheme = lower(u.substr(0, col));
+  for (char c : scheme) if (!(isalnum((unsigned char)c) || c == '+' || c == '-' || c == '.')) return;
+  if (scheme == "javascript" || scheme == "vbscript" || scheme == "file" || scheme == "ms-msdt" || scheme == "search-ms") return;
+  HKEY hk = nullptr;
+  if (RegOpenKeyExW(HKEY_CLASSES_ROOT, (W(scheme) + L"\\shell\\open\\command").c_str(), 0, KEY_READ, &hk) == ERROR_SUCCESS) {
+    RegCloseKey(hk);
+    ShellExecuteW(g_hwnd, L"open", W(u).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  }
 }
 
 // ---------------------------------------------------------------- picker request (the page logic is in ui\ui.js)
@@ -1321,7 +1343,12 @@ static void wireTab(Tab* t) {
     CoStr uri; a->get_Uri(uri.put());
     string u = U8(uri.w);
     string l = lower(u.substr(0, 8));
-    if (!(startsWith(l, "http") || startsWith(l, "about:") || startsWith(l, "data:") || startsWith(l, "blob:") || startsWith(l, "file:"))) { a->put_Cancel(TRUE); return S_OK; }
+    if (!(startsWith(l, "http") || startsWith(l, "about:") || startsWith(l, "data:") || startsWith(l, "blob:") || startsWith(l, "file:"))) {
+      a->put_Cancel(TRUE);
+      BOOL user = FALSE; a->get_IsUserInitiated(&user);
+      if (user || nowMs() - t->lastGesture < 2000) openInstalledApp(u);
+      return S_OK;
+    }
     if (!isHttp(u)) return S_OK;
     if (!g_torCc.empty() && startsWith(u, "http:")) { a->put_Cancel(TRUE); notice("A Tor window opens secure (https) pages only: the exit could read and change anything else."); return S_OK; }
     t->lastNav = u;
@@ -1473,11 +1500,12 @@ static void wireTab(Tab* t) {
     a->put_Handled(TRUE);
     t->lastPopup = nowMs();
     bool clicked = user || nowMs() - t->lastGesture < 1500;
-    if (modeFor(t) == "OFF") { newTab(u); return S_OK; }
+    if (!isHttp(u)) { if (clicked) openInstalledApp(u); return S_OK; }
+    if (modeFor(t) == "OFF") { if (Tab* ch = newTab(u)) ch->openerId = t->id; return S_OK; }
     string c = classify(u);
     if (c == "TRACKER") return S_OK;
     // a link the person clicked opens in a tab, on any site; only the ad lists and gesture-less script popups are held back
-    if (c != "AD" && isHttp(u) && (user || (clicked && sameSite(u, t->url)))) { newTab(u); return S_OK; }
+    if (c != "AD" && isHttp(u) && (user || (clicked && sameSite(u, t->url)))) { if (Tab* ch = newTab(u)) ch->openerId = t->id; return S_OK; }
     g_counts["popups"] = g_counts["popups"].get<int>() + 1;
     addBillboard("Popup", u, t->url);
     notice(mode() == "BLOCK" ? "Popup blocked" : "Popup sent to Shields log", (c != "AD" && clicked && isHttp(u)) ? json({{"label", "Open in tab"}, {"url", u}}) : json(nullptr));

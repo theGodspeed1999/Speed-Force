@@ -74,6 +74,7 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
     var canGoBack by mutableStateOf(false)
     var canGoForward by mutableStateOf(false)
     var videoCount by mutableIntStateOf(0)
+    var openerId: Int? = null
     /** True while the page is on plain http:// (shown as a warning in the address bar). */
     var insecure by mutableStateOf(false)
     /** Trackers and ads stopped on the page you are on, and ads hidden by the page script. */
@@ -347,8 +348,10 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
             val u = request.url.toString()
             if (request.isForMainFrame && popupRefused(u)) return true
             val scheme = request.url.scheme?.lowercase() ?: ""
-            // Block app-store / intent:// jumps and other non-web links that ads use
-            if (scheme != "http" && scheme != "https" && scheme != "about" && scheme != "data" && scheme != "blob") return true
+            if (scheme != "http" && scheme != "https" && scheme != "about" && scheme != "data" && scheme != "blob") {
+                if (request.hasGesture()) openInstalledApp(u, scheme, request.url)
+                return true
+            }
             if (!request.isForMainFrame) return false
             if (shieldsDownHere()) return false
             // A link you tapped may go anywhere that isn't a known ad network; a jump you didn't tap is checked fully
@@ -653,6 +656,7 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         val hit = view.hitTestResult
         val tappedLink = hit.extra?.takeIf { hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE }
         val child = listener.newPopupTab()
+        child.openerId = this.id
         child.popupGate = { u ->
             val tapped = tappedLink != null && UrlUtils.dedupeKey(u) == UrlUtils.dedupeKey(tappedLink)
             val wanted = AdFilter.mode == AdMode.OFF || (!AdFilter.isAd(u) && (UrlUtils.sameSite(u, opener) || tapped))
@@ -670,6 +674,25 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
         // a popup that never goes anywhere is thrown away
         main.postDelayed({ if (child.popupGate != null) { child.popupGate = null; child.destroy() } }, 15_000)
         return child.webView
+    }
+
+    /** Opens an external app (e.g. Telegram) only when the user tapped it and the app is installed. */
+    private fun openInstalledApp(url: String, scheme: String, uri: android.net.Uri) {
+        if (scheme.isEmpty() || scheme in setOf("javascript", "vbscript", "file", "content", "market")) return
+        try {
+            val intent = if (scheme == "intent") {
+                android.content.Intent.parseUri(url, android.content.Intent.URI_INTENT_SCHEME).apply {
+                    selector = null
+                    removeExtra("browser_fallback_url")
+                    if (`package` == "com.android.vending") return
+                }
+            } else {
+                android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+            }
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (_: Exception) {
+        }
     }
 
     /** Stops hiding ads on this page (until it is reloaded), so the user can see an ad and close it. */

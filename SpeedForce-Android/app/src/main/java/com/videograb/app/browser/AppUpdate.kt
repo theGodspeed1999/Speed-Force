@@ -15,7 +15,7 @@ import java.security.MessageDigest
 
 /** Checks GitHub Releases on startup and downloads a newer APK when available. */
 object AppUpdate {
-    const val CURRENT_VERSION = "1.5.1"
+    const val CURRENT_VERSION = "1.5.2"
     private const val LATEST_API = "https://api.github.com/repos/theGodspeed1999/Speed-Force/releases/latest"
 
     data class Ready(val version: String, val apk: File)
