@@ -414,6 +414,19 @@ fun BrowserScreen(activity: MainActivity) {
                         if (privateMode) Text("Private mode on", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.padding(end = 8.dp))
                         TextButton({ showTabs = false }) { Text("Done") }
                     }
+                    val inactive = tabs.inactiveTabs()
+                    if (inactive.isNotEmpty()) {
+                        Surface(
+                            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                        ) {
+                            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Inactive (30+ days): ${inactive.size}", Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                TextButton({ tabs.closeInactive(Prefs.homePage) }) { Text("Delete all") }
+                            }
+                        }
+                    }
                     LazyVerticalGrid(
                         GridCells.Fixed(2), Modifier.weight(1f).padding(horizontal = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp),

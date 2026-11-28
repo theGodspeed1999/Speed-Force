@@ -67,6 +67,8 @@ function renderTabs() {
     box.append(tab);
   });
   box.append(h('button', { id: 'new-tab', title: 'New tab (Ctrl+T)', onclick: () => cmd('newTab') }, '+'));
+  const old = st.tabs.filter(t => t.inactive);
+  if (old.length) box.append(h('button', { class: 'btn', title: 'Tabs unused for 30+ days', onclick: () => openPanel('inactive') }, `Inactive (${old.length})`));
 }
 
 // ---------------------------------------------------------------- toolbar
@@ -172,7 +174,7 @@ function hideNotice() { $('notice').hidden = true; syncHeight(); }
 $('notice-close').onclick = hideNotice;
 
 // ---------------------------------------------------------------- panels
-const TITLES = { shields: 'Shields', downloads: 'Downloads', history: 'History', bookmarks: 'Bookmarks', ads: 'Shields log', settings: 'Settings', picker: 'Download video' };
+const TITLES = { shields: 'Shields', downloads: 'Downloads', history: 'History', bookmarks: 'Bookmarks', ads: 'Shields log', settings: 'Settings', picker: 'Download video', inactive: 'Inactive tabs (30+ days)' };
 
 function openPanel(name) {
   panel = name;
@@ -202,7 +204,24 @@ async function renderPanel() {
   else if (panel === 'history') body.replaceChildren(...await historyView());
   else if (panel === 'bookmarks') body.replaceChildren(...await bookmarksView());
   else if (panel === 'settings') body.replaceChildren(...await settingsView());
+  else if (panel === 'inactive') body.replaceChildren(...inactiveView());
   body.scrollTop = keep;
+}
+
+function inactiveView() {
+  const old = (st && st.tabs || []).filter(t => t.inactive);
+  const out = [h('div', { class: 'toolbar' },
+    h('button', { class: 'btn primary', onclick: () => { cmd('closeInactive'); closePanel(); } }, 'Delete all'))];
+  if (!old.length) out.push(h('p', { class: 'hint' }, 'No tabs unused for 30+ days.'));
+  for (const t of old) {
+    out.push(h('div', { class: 'item' },
+      h('div', { class: 't' }, t.title || 'New tab'),
+      h('div', { class: 's' }, t.url || ''),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn', onclick: () => { cmd('selectTab', t.id); closePanel(); } }, 'Open'),
+        h('button', { class: 'btn', onclick: () => cmd('closeTab', t.id) }, 'Delete'))));
+  }
+  return out;
 }
 
 // ---- shields

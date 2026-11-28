@@ -421,6 +421,7 @@
     '.ad-notification-popup', '[id^="ts_ad_native_"]', 'ins[data-key]',
     // ExoClick video slider in the corner
     '[class*="msg-video-slider"]', '[id$="-msg-video-slider-content"]', '.exo_wrapper',
+    '.__bai-overlay', '#int_hsSJlay', '[class*="bai-overlay"]',
     // Google: full-screen "vignette", sticky bottom "anchor" and "side rail" ads, ad frames without an address
     'ins[data-vignette-loaded]', 'ins[data-anchor-status]', 'ins[data-side-rail-status]', '[id^="google_ads_iframe"]', '[id^="aswift_"]'
   ].join(',');
@@ -588,9 +589,11 @@
   // --- whatever calls itself an ad ---
   // A box labelled "Advertisement" is an ad, whatever network it comes from.
   var AD_LABEL = /^(advertisements?|advertising|adverts?|ads|sponsored|sponsored (ads?|links?|content)|ads? by .{1,20}|publicidad|publicit[eé]|werbung|anzeige|реклама|विज्ञापन|广告)$/i;
-  var PROMO_BANNER = /\b(get access|full video here|watch & download|download full video|unlock full video|build the ai girl|your ai girlfriend)\b/i;
+  var PROMO_BANNER = /\b(get access|full video here|watch & download|download full video|unlock full video|build the ai girl|your ai girlfriend|best porn)\b/i;
   function labelledBox(label) {
-    var best = null, up = label.parentElement;
+    var link = label.closest && label.closest('a[href]');
+    var best = (link && !hasRealVideo(link) && (link.innerText || '').length <= 150) ? link : null;
+    var up = (best || label).parentElement;
     for (var k = 0; k < 4 && up && up !== document.body && up !== document.documentElement; k++, up = up.parentElement) {
       var t = up.tagName;
       if (t === 'MAIN' || t === 'ARTICLE' || t === 'NAV' || t === 'HEADER' || t === 'FOOTER') break;
@@ -607,6 +610,7 @@
       if (el.hasAttribute('data-vgad')) continue;
       var t = (el.textContent || '').trim();
       var isAdTag = t === 'AD' || t === 'Ad';
+      var isLiveTag = t === 'LIVE' || t === 'Live';
       if (!el.firstElementChild && t.length >= 2 && t.length <= 30 && (isAdTag || AD_LABEL.test(t))) {
         if (el.closest(isAdTag ? 'button,nav,header,footer,li,[role="button"],[role="menu"],[data-vgad]' : 'a,button,nav,header,footer,li,[role="button"],[role="menu"],[data-vgad]')) continue;
         var box = labelledBox(el);
@@ -616,11 +620,24 @@
         n++;
         continue;
       }
-      if ((el.tagName === 'A' || el.tagName === 'DIV') && t.length >= 8 && t.length <= 120 && PROMO_BANNER.test(t)) {
+      if (!el.firstElementChild && isLiveTag) {
+        var card = el.closest && el.closest('a[href]');
+        if (card && !card.hasAttribute('data-vgad') && !el.closest('nav,header,footer,[data-vgad]') && !hasRealVideo(card) && card.querySelector('video,img')) {
+          var box = labelledBox(card);
+          if (box !== card && !hasRealVideo(box)) { box.setAttribute('data-vgov', ''); box.setAttribute('data-vgad', ''); }
+          card.setAttribute('data-vgov', '');
+          card.setAttribute('data-vgad', '');
+          n++;
+          continue;
+        }
+      }
+      if ((el.tagName === 'A' || el.tagName === 'DIV' || el.tagName === 'SPAN') && t.length >= 8 && t.length <= 120 && PROMO_BANNER.test(t)) {
         if (el.closest('nav,header,footer,[data-vgad]') || el.querySelector('input,form,video,[data-videograb]')) continue;
         if (el.tagName === 'DIV' && !el.querySelector('a[href]')) continue;
         var r = el.getBoundingClientRect();
-        if (r.height > 0 && r.height <= 140 && !hasRealVideo(el)) {
+        if (r.height <= 140 && !hasRealVideo(el)) {
+          var box = labelledBox(el);
+          if (box !== el && !hasRealVideo(box)) { box.setAttribute('data-vgov', ''); box.setAttribute('data-vgad', ''); }
           el.setAttribute('data-vgov', '');
           el.setAttribute('data-vgad', '');
           n++;

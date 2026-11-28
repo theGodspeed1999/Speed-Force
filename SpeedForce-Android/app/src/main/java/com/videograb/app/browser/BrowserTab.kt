@@ -75,6 +75,7 @@ class BrowserTab(val id: Int, private val context: Context, private val listener
     var canGoForward by mutableStateOf(false)
     var videoCount by mutableIntStateOf(0)
     var openerId: Int? = null
+    var lastUsedAt: Long = System.currentTimeMillis()
     /** True while the page is on plain http:// (shown as a warning in the address bar). */
     var insecure by mutableStateOf(false)
     /** Trackers and ads stopped on the page you are on, and ads hidden by the page script. */

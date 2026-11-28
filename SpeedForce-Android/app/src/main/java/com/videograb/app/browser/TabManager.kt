@@ -8,6 +8,10 @@ import androidx.compose.runtime.setValue
 
 /** Simple list of browser tabs. */
 class TabManager(private val context: Context, private val listener: TabListener) {
+    companion object {
+        const val INACTIVE_MS = 30L * 24 * 3600 * 1000
+        fun isInactive(lastUsedAt: Long, now: Long = System.currentTimeMillis()): Boolean = now - lastUsedAt >= INACTIVE_MS
+    }
     val tabs = mutableStateListOf<BrowserTab>()
     var currentIndex by mutableIntStateOf(0)
     private var nextId = 1
@@ -36,10 +40,12 @@ class TabManager(private val context: Context, private val listener: TabListener
      * Bring back the tabs from last time. Only the front tab loads now; the others load
      * when you open them (so starting the app stays fast).
      */
-    fun restore(urls: List<String>, front: Int) {
+    fun restore(urls: List<String>, front: Int, times: List<Long> = emptyList()) {
         val f = front.coerceIn(0, urls.size - 1)
+        val now = System.currentTimeMillis()
         urls.forEachIndexed { i, u ->
             val tab = BrowserTab(nextId++, context, listener)
+            tab.lastUsedAt = if (i == f) now else times.getOrElse(i) { now }
             tabs.add(tab)
             if (i == f) tab.load(u) else tab.loadLater(u)
         }
@@ -50,6 +56,7 @@ class TabManager(private val context: Context, private val listener: TabListener
         if (index in tabs.indices) {
             if (index != currentIndex) { current.capture(); current.pause() }
             currentIndex = index
+            tabs[index].lastUsedAt = System.currentTimeMillis()
             tabs[index].resume()
             tabs[index].loadPending()
         }
@@ -81,6 +88,17 @@ class TabManager(private val context: Context, private val listener: TabListener
 
     /** Addresses of all open tabs (for reopening them next time). */
     fun urls(): List<String> = tabs.map { it.pendingUrl ?: it.url }
+
+    fun times(): List<Long> = tabs.map { it.lastUsedAt }
+
+    fun inactiveTabs(now: Long = System.currentTimeMillis()): List<BrowserTab> =
+        tabs.filterIndexed { i, t -> i != currentIndex && isInactive(t.lastUsedAt, now) }
+
+    fun closeInactive(homeUrl: String, now: Long = System.currentTimeMillis()) {
+        for (i in tabs.indices.reversed()) {
+            if (i != currentIndex && isInactive(tabs[i].lastUsedAt, now)) close(i, homeUrl)
+        }
+    }
 
     fun hasOpener(tab: BrowserTab): Boolean = tab.openerId?.let { id -> tabs.any { it.id == id } } == true
 

@@ -16,7 +16,7 @@
 #include "tor.h"
 
 #define APP_NAME L"Speed Force"
-#define SF_VERSION "1.5.3"
+#define SF_VERSION "1.5.4"
 static const char* kStartUrl = "https://sf.start/";
 // The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
 static const char* kLensUrl = "https://lens.google.com/speedforce/";
@@ -89,6 +89,7 @@ struct Tab {
   ULONGLONG lastGesture = 0, lastBack = 0, lastPopup = 0, finished = 0, lastVideoTap = 0, hiddenSince = 0;
   bool canBack = false, canFwd = false;
   int openerId = 0;
+  int64_t lastUsed = unixMs();
   double zoom = 1.0;
   EventRegistrationToken resTok{}, msgTok{};
 };
@@ -254,7 +255,8 @@ static void notice(const string& text, json action = nullptr) { sendUi("notice",
 
 static json tabState(Tab* t) {
   bool st = isStart(t->url);
-  return {{"id", t->id}, {"title", st ? "New tab" : t->title}, {"url", st ? "" : t->url}, {"loading", t->loading}, {"favicon", t->favicon}, {"active", t == g_cur}};
+  bool inactive = t != g_cur && (unixMs() - t->lastUsed) >= 30LL * 24 * 3600 * 1000;
+  return {{"id", t->id}, {"title", st ? "New tab" : t->title}, {"url", st ? "" : t->url}, {"loading", t->loading}, {"favicon", t->favicon}, {"active", t == g_cur}, {"inactive", inactive}};
 }
 static bool g_statePending = false;
 static void pushState() {
@@ -395,6 +397,7 @@ static string prepareUrl(Tab* t, string u) {
 }
 
 static void loadTab(Tab* t, const string& url) {
+  t->lastUsed = unixMs();
   t->pending.clear();
   if (url.empty()) return;
   string u = isStart(url) ? string(kStartUrl) : prepareUrl(t, url);
@@ -447,6 +450,7 @@ static void selectTab(Tab* t) {
   hidePopup();
   Tab* prev = g_cur;
   g_cur = t;
+  t->lastUsed = unixMs();
   if (prev && prev != t) { prev->hiddenSince = nowMs(); if (prev->ctl) prev->ctl->put_IsVisible(FALSE); }
   ensureView(t);
   if (t->wv && t->suspended) {
@@ -1889,6 +1893,13 @@ static void handleUi(const json& m) {
   }
   else if (c == "searchWith") { string q = t ? searchQueryOf(t->url) : ""; auto it = searchEngines().find(A(0).get<string>()); if (!q.empty() && it != searchEngines().end()) loadTab(t, it->second + urlEncode(q)); ret(); }
   else if (c == "back") { if (t) goBack(t); ret(); }
+  else if (c == "closeInactive") {
+    int64_t now = unixMs();
+    std::vector<int> ids;
+    for (auto& x : g_tabs) if (x.get() != g_cur && (now - x->lastUsed) >= 30LL * 24 * 3600 * 1000) ids.push_back(x->id);
+    for (int tid : ids) if (Tab* x = tabById(tid)) closeTab(x);
+    ret();
+  }
   else if (c == "forward") { if (t && t->wv) t->wv->GoForward(); ret(); }
   else if (c == "reload") { if (t && t->wv) { if (t->loading) t->wv->Stop(); else t->wv->Reload(); } ret(); }
   else if (c == "home") {
@@ -2135,22 +2146,40 @@ static void handleKey(const string& cmd) {
 static void saveTabsNow() {
   if (g_secondary) return;
   if (g_settings.value("private", false) || !g_settings.value("restoreTabs", true)) { writeFile(g_data + L"\\tabs.json", "{}"); return; }
-  json u = json::array();
+  json u = json::array(), ts = json::array();
   int cur = 0;
   for (auto& t : g_tabs) {
     string url = !t->pending.empty() ? t->pending : t->url;
-    if (isHttp(url) && !isStart(url) && !isLensPage(t->lens, url) && hostOf(url) != "sf.diag" && u.size() < 50) { if (t.get() == g_cur) cur = (int)u.size(); u.push_back(url); }
+    if (isHttp(url) && !isStart(url) && !isLensPage(t->lens, url) && hostOf(url) != "sf.diag" && u.size() < 50) {
+      if (t.get() == g_cur) cur = (int)u.size();
+      u.push_back(url);
+      ts.push_back(t->lastUsed);
+    }
   }
-  writeFile(g_data + L"\\tabs.json", json({{"u", u}, {"i", cur}}).dump());
+  writeFile(g_data + L"\\tabs.json", json({{"u", u}, {"t", ts}, {"i", cur}}).dump());
   writeFile(g_data + L"\\stats.json", g_stats.dump());
 }
 
 static void startBrowsing(const string& argUrl) {
   json saved = g_settings.value("restoreTabs", true) && !g_settings.value("private", false) && !g_secondary ?readJson(g_data + L"\\tabs.json", json::object()) : json::object();
   std::vector<string> urls;
-  if (saved.contains("u")) for (auto& u : saved["u"]) if (isHttp(u.get<string>())) urls.push_back(u);
+  std::vector<int64_t> times;
+  int64_t now = unixMs();
+  if (saved.contains("u")) {
+    for (size_t i = 0; i < saved["u"].size(); i++) {
+      string u = saved["u"][i].get<string>();
+      if (isHttp(u)) {
+        urls.push_back(u);
+        int64_t t = (saved.contains("t") && i < saved["t"].size() && saved["t"][i].is_number_integer()) ? saved["t"][i].get<int64_t>() : now;
+        times.push_back(t);
+      }
+    }
+  }
   int cur = saved.value("i", 0);
-  for (size_t i = 0; i < urls.size(); i++) newTab(urls[i], false, (int)i != cur);
+  for (size_t i = 0; i < urls.size(); i++) {
+    Tab* t = newTab(urls[i], false, (int)i != cur);
+    if (t) t->lastUsed = (int)i == cur ? now : times[i];
+  }
   if (!argUrl.empty()) newTab(argUrl);
   else if (!urls.empty()) selectTab(g_tabs[std::min<size_t>(cur, g_tabs.size() - 1)].get());
   else newTab(g_settings.value("home", string(kStartUrl)));

@@ -146,7 +146,7 @@ class MainActivity : ComponentActivity(), TabListener {
         val startUrl = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString
         // Reopen the tabs from last time (like a normal browser); a link you opened the app with goes on top
         val (saved, front) = Prefs.savedTabs()
-        if (saved.isNotEmpty()) tabs.restore(saved, front)
+        if (saved.isNotEmpty()) tabs.restore(saved, front, Prefs.savedTabTimes())
         com.videograb.app.browser.CookieGuard.atStart(saved + listOfNotNull(startUrl))
         if (startUrl != null || saved.isEmpty()) tabs.newTab(startUrl ?: Prefs.homePage)
         handleShare(intent)
@@ -440,7 +440,7 @@ class MainActivity : ComponentActivity(), TabListener {
     override fun onStop() {
         super.onStop()
         // Remember the open tabs; the app may be closed or swiped away from here on
-        if (::tabs.isInitialized) Prefs.saveTabs(tabs.urls(), tabs.currentIndex)
+        if (::tabs.isInitialized) Prefs.saveTabs(tabs.urls(), tabs.currentIndex, tabs.times())
     }
 
     override fun onDestroy() {

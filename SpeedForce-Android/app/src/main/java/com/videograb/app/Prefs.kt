@@ -152,11 +152,25 @@ object Prefs {
         return urls to o.optInt("i", 0)
     }
 
-    fun saveTabs(urls: List<String>, current: Int) {
+    fun savedTabTimes(): List<Long> {
+        if (privateMode || !restoreTabs) return emptyList()
+        val o = try { JSONObject(sp.getString("tabs", "{}")!!) } catch (e: Exception) { JSONObject() }
+        val arr = o.optJSONArray("t") ?: return emptyList()
+        return (0 until arr.length()).map { arr.optLong(it, System.currentTimeMillis()) }
+    }
+
+    fun saveTabs(urls: List<String>, current: Int, times: List<Long> = emptyList()) {
         if (privateMode || !restoreTabs) { clearSavedTabs(); return }
         val arr = JSONArray()
-        urls.filter { it.startsWith("http") && !it.startsWith(com.videograb.app.browser.Diagnostic.BASE) }.take(50).forEach { arr.put(it) }
-        sp.edit().putString("tabs", JSONObject().put("u", arr).put("i", current).toString()).apply()
+        val tArr = JSONArray()
+        val now = System.currentTimeMillis()
+        urls.forEachIndexed { idx, u ->
+            if (u.startsWith("http") && !u.startsWith(com.videograb.app.browser.Diagnostic.BASE) && arr.length() < 50) {
+                arr.put(u)
+                tArr.put(times.getOrElse(idx) { now })
+            }
+        }
+        sp.edit().putString("tabs", JSONObject().put("u", arr).put("t", tArr).put("i", current).toString()).apply()
     }
 
     fun clearSavedTabs() = sp.edit().remove("tabs").apply()
