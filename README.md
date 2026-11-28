@@ -28,14 +28,15 @@ runtime, which most Windows 10 and 11 PCs already have.
 - **Blocks ads and trackers.** Choose *Aggressively block*, *Block*, or *Allow all*. You can switch
   protection off for a single site.
 - **Stops popups and forced redirects**, and keeps a log of what it stopped.
-- **Downloads videos** with a choice of quality, and **downloads other files** too.
+- **Downloads videos** with a choice of quality, and **downloads other files** too. On Android, the Download button appears only on a video while it is playing.
 - **Tries the secure (https) version** of a site first.
 - **Rejects cookie banners** for you where they offer it, and never presses Accept.
 - **Cookie guard** (off until you turn it on): deletes a site's cookies when you close it, except on sites you trust.
-- **Tells you why a page did not load**, and can check from test servers in other countries whether the site opens there.
-- **Tabs**, private browsing, history, bookmarks and a choice of search engine.
+- **Tells you why a page did not load**, and can check from test servers in other countries whether the site opens there (and on Windows, connect through Tor for supported countries).
+- **Tabs**, **inactive tabs** (groups tabs unused for 30+ days so you can review and delete them), **back to original tab** (going back on a newly opened tab returns to the tab that opened it), private browsing, history, bookmarks and a choice of search engine.
+- **Opens installed apps** when you tap a link for an app already on your device.
 - **Light, dark or system theme.**
-- **Auto-update:** checks GitHub on startup for a newer release and downloads it so you can install it without visiting GitHub.
+- **Auto-update:** checks GitHub on startup (or via **Check for updates** in Settings) for a newer release, verifies its checksum, downloads it for you to install, and cleans up old update files afterwards.
 - A clean start page with no news and no sponsored tiles.
 
 ### Android
