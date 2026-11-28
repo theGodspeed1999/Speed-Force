@@ -13,12 +13,18 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/** Checks GitHub Releases on startup and downloads a newer APK when available. */
+/** Checks GitHub Releases on startup or manually, verifies SHA-256, and cleans up old APKs. */
 object AppUpdate {
-    const val CURRENT_VERSION = "1.5.2"
+    const val CURRENT_VERSION = "1.5.3"
     private const val LATEST_API = "https://api.github.com/repos/theGodspeed1999/Speed-Force/releases/latest"
 
     data class Ready(val version: String, val apk: File)
+
+    sealed class CheckResult {
+        data class UpdateReady(val ready: Ready) : CheckResult()
+        data object UpToDate : CheckResult()
+        data class Failed(val reason: String) : CheckResult()
+    }
 
     fun isNewer(remoteTag: String, current: String = CURRENT_VERSION): Boolean {
         val clean = remoteTag.trim().trimStart('v', 'V').substringBefore('-')
@@ -30,25 +36,46 @@ object AppUpdate {
         if (Build.SUPPORTED_ABIS.any { it.contains("arm64") }) "SpeedForce-Android-arm64.apk"
         else "SpeedForce-Android-universal.apk"
 
-    suspend fun checkAndDownload(context: Context): Ready? = withContext(Dispatchers.IO) {
+    /** Removes downloaded APKs for this or older versions so they don't waste phone storage. */
+    fun cleanOldUpdates(context: Context) {
+        val dir = File(context.cacheDir, "updates")
+        if (!dir.isDirectory) return
+        dir.listFiles()?.forEach { f ->
+            val ver = f.name.removePrefix("SpeedForce-").removeSuffix(".apk")
+            if (f.name.endsWith(".tmp") || !f.name.endsWith(".apk") || !isNewer(ver)) {
+                f.delete()
+            }
+        }
+    }
+
+    suspend fun checkAndDownload(context: Context): Ready? =
+        (checkNow(context) as? CheckResult.UpdateReady)?.ready
+
+    suspend fun checkNow(context: Context, onProgress: (String) -> Unit = {}): CheckResult = withContext(Dispatchers.IO) {
+        cleanOldUpdates(context)
         try {
+            onProgress("Checking GitHub…")
             val conn = (URL(LATEST_API).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10_000
                 readTimeout = 10_000
                 setRequestProperty("User-Agent", "SpeedForce")
                 setRequestProperty("Accept", "application/vnd.github+json")
             }
-            if (conn.responseCode != 200) { conn.disconnect(); return@withContext null }
+            if (conn.responseCode != 200) {
+                val code = conn.responseCode
+                conn.disconnect()
+                return@withContext CheckResult.Failed("GitHub returned HTTP $code")
+            }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             conn.disconnect()
 
             val json = JSONObject(body)
             val tag = json.optString("tag_name", "")
-            if (!isNewer(tag)) return@withContext null
+            if (!isNewer(tag)) return@withContext CheckResult.UpToDate
             val version = tag.trim().trimStart('v', 'V')
 
             val wanted = preferredAssetName()
-            val assets = json.optJSONArray("assets") ?: return@withContext null
+            val assets = json.optJSONArray("assets") ?: return@withContext CheckResult.Failed("No release files found")
             var url: String? = null
             var assetName = wanted
             var sumsUrl: String? = null
@@ -62,18 +89,18 @@ object AppUpdate {
                     sumsUrl = a.optString("browser_download_url", "").ifEmpty { null }
                 }
             }
-            if (url == null) return@withContext null
+            if (url == null) return@withContext CheckResult.Failed("No APK in release")
             val expectedHash = sumsUrl?.let { fetchExpectedHash(it, assetName) }
-            if (sumsUrl != null && expectedHash == null) return@withContext null
+            if (sumsUrl != null && expectedHash == null) return@withContext CheckResult.Failed("Could not verify checksum list")
 
             val dir = File(context.cacheDir, "updates").apply { mkdirs() }
             val target = File(dir, "SpeedForce-$version.apk")
             if (target.exists() && target.length() > 0) {
-                if (expectedHash == null || sha256(target) == expectedHash) return@withContext Ready(version, target)
+                if (expectedHash == null || sha256(target) == expectedHash) return@withContext CheckResult.UpdateReady(Ready(version, target))
                 target.delete()
             }
 
-            // Remove older cached APKs before downloading the new one
+            onProgress("Downloading $version…")
             dir.listFiles()?.forEach { it.delete() }
             val tmp = File(dir, "SpeedForce-$version.apk.tmp")
             val dl = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -82,16 +109,26 @@ object AppUpdate {
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", "SpeedForce")
             }
-            if (dl.responseCode != 200) { dl.disconnect(); return@withContext null }
+            if (dl.responseCode != 200) {
+                val code = dl.responseCode
+                dl.disconnect()
+                return@withContext CheckResult.Failed("Download failed (HTTP $code)")
+            }
             dl.inputStream.use { input ->
                 tmp.outputStream().use { output -> input.copyTo(output) }
             }
             dl.disconnect()
-            if (expectedHash != null && sha256(tmp) != expectedHash) { tmp.delete(); return@withContext null }
-            if (!tmp.renameTo(target)) { tmp.delete(); return@withContext null }
-            Ready(version, target)
-        } catch (_: Exception) {
-            null
+            if (expectedHash != null && sha256(tmp) != expectedHash) {
+                tmp.delete()
+                return@withContext CheckResult.Failed("Checksum mismatch")
+            }
+            if (!tmp.renameTo(target)) {
+                tmp.delete()
+                return@withContext CheckResult.Failed("Could not save APK")
+            }
+            CheckResult.UpdateReady(Ready(version, target))
+        } catch (e: Exception) {
+            CheckResult.Failed(e.message ?: "Check failed")
         }
     }
 

@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.videograb.app.MainActivity
 import com.videograb.app.Prefs
+import com.videograb.app.browser.AppUpdate
 import com.videograb.app.util.UrlUtils
 import com.videograb.app.browser.WebViewHealth
 import com.videograb.app.util.VersionUtils
@@ -88,6 +89,35 @@ fun SettingsScreen(activity: MainActivity) {
             SwitchRow("Dark mode for web pages (makes light sites dark)", darkPages) {
                 darkPages = it; Prefs.darkPages = it; activity.applySettingsToTabs(); activity.tabs.current.webView.reload()
             }
+        }
+        Section("App update") {
+            var appChecking by remember { mutableStateOf(false) }
+            var appStatus by remember { mutableStateOf("") }
+            var readyApk by remember { mutableStateOf<AppUpdate.Ready?>(null) }
+            Text("Current version: ${AppUpdate.CURRENT_VERSION}", fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = {
+                        appChecking = true; appStatus = "Checking GitHub…"; readyApk = null
+                        scope.launch {
+                            when (val res = AppUpdate.checkNow(ctx) { appStatus = it }) {
+                                is AppUpdate.CheckResult.UpdateReady -> {
+                                    readyApk = res.ready
+                                    appStatus = "Speed Force ${res.ready.version} is ready."
+                                }
+                                is AppUpdate.CheckResult.UpToDate -> appStatus = "You are on the latest version."
+                                is AppUpdate.CheckResult.Failed -> appStatus = res.reason
+                            }
+                            appChecking = false
+                        }
+                    },
+                    enabled = !appChecking,
+                ) { Text(if (appChecking) "Checking…" else "Check for updates") }
+                readyApk?.let { r ->
+                    Button(onClick = { AppUpdate.install(ctx, r.apk) }) { Text("Install ${r.version}") }
+                }
+            }
+            if (appStatus.isNotEmpty()) Text(appStatus, fontSize = 12.sp, color = Color.Gray)
         }
         Section("Download engine (yt-dlp)") {
             Text("Version: $version", fontSize = 13.sp)

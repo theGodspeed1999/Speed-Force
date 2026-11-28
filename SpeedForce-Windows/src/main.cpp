@@ -16,7 +16,7 @@
 #include "tor.h"
 
 #define APP_NAME L"Speed Force"
-#define SF_VERSION "1.5.2"
+#define SF_VERSION "1.5.3"
 static const char* kStartUrl = "https://sf.start/";
 // The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
 static const char* kLensUrl = "https://lens.google.com/speedforce/";
@@ -702,20 +702,32 @@ static string expectedSha256(const string& sums, const string& fileName) {
   return "";
 }
 
-static void checkAppUpdate() {
-  if (g_private || !g_torCc.empty() || g_secondary) return;
+static void cleanOldUpdates(const wstring& dataDir) {
+  DeleteFileW((dataDir + L"\\SpeedForce-Setup.exe").c_str());
+  DeleteFileW((dataDir + L"\\SpeedForce-Setup.exe.tmp").c_str());
+  DeleteFileW((dataDir + L"\\sf-update.cmd").c_str());
+}
+
+static void checkAppUpdate(bool manual = false, int replyId = 0) {
+  if (!manual && (g_private || !g_torCc.empty() || g_secondary)) return;
 #ifdef SF_TEST
   wchar_t shotBuf[4] = {};
-  if (GetEnvironmentVariableW(L"SF_SHOT", shotBuf, 4)) return;
+  if (!manual && GetEnvironmentVariableW(L"SF_SHOT", shotBuf, 4)) return;
 #endif
   wstring dataDir = g_data;
-  std::thread([dataDir] {
+  std::thread([dataDir, manual, replyId] {
+    auto done = [manual, replyId](const string& msg) {
+      if (manual) postUi([replyId, msg] { replyUi(replyId, msg); });
+    };
+    if (!manual) cleanOldUpdates(dataDir);
     string body;
-    if (runCurl(L"-fsSL -m 15 -H \"User-Agent: SpeedForce\" \"https://api.github.com/repos/theGodspeed1999/Speed-Force/releases/latest\"", body) != 0) return;
+    if (runCurl(L"-fsSL -m 15 -H \"User-Agent: SpeedForce\" \"https://api.github.com/repos/theGodspeed1999/Speed-Force/releases/latest\"", body) != 0) {
+      done("Could not reach GitHub."); return;
+    }
     json j = json::parse(body, nullptr, false);
-    if (!j.is_object()) return;
+    if (!j.is_object()) { done("Invalid response from GitHub."); return; }
     string tag = j.value("tag_name", "");
-    if (!isNewerVersion(tag, SF_VERSION)) return;
+    if (!isNewerVersion(tag, SF_VERSION)) { done("You are on the latest version (" + string(SF_VERSION) + ")."); return; }
     string ver = (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) ? tag.substr(1) : tag;
     string dlUrl, sumsUrl;
     if (j.contains("assets") && j["assets"].is_array()) {
@@ -725,18 +737,25 @@ static void checkAppUpdate() {
         else if (name == "SHA256SUMS.txt") sumsUrl = a.value("browser_download_url", "");
       }
     }
-    if (dlUrl.empty() || sumsUrl.empty()) return;
+    if (dlUrl.empty() || sumsUrl.empty()) { done("Update files missing in release."); return; }
     string sums;
-    if (runCurl(L"-fsSL -L -m 15 -H \"User-Agent: SpeedForce\" \"" + W(sumsUrl) + L"\"", sums) != 0) return;
+    if (runCurl(L"-fsSL -L -m 15 -H \"User-Agent: SpeedForce\" \"" + W(sumsUrl) + L"\"", sums) != 0) { done("Could not fetch checksums."); return; }
     string wantHash = expectedSha256(sums, "SpeedForce-Setup.exe");
-    if (wantHash.empty()) return;
+    if (wantHash.empty()) { done("Checksum missing for installer."); return; }
     wstring setup = dataDir + L"\\SpeedForce-Setup.exe", tmp = setup + L".tmp";
     DeleteFileW(tmp.c_str());
     string dummy;
-    if (runCurl(L"-fsSL -L -m 120 -H \"User-Agent: SpeedForce\" -o \"" + tmp + L"\" \"" + W(dlUrl) + L"\"", dummy) != 0) { DeleteFileW(tmp.c_str()); return; }
-    if (sha256File(tmp) != wantHash) { DeleteFileW(tmp.c_str()); return; }
-    if (!MoveFileExW(tmp.c_str(), setup.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return; }
-    postUi([ver, setup] {
+    if (runCurl(L"-fsSL -L -m 120 -H \"User-Agent: SpeedForce\" -o \"" + tmp + L"\" \"" + W(dlUrl) + L"\"", dummy) != 0) {
+      DeleteFileW(tmp.c_str()); done("Download failed."); return;
+    }
+    if (sha256File(tmp) != wantHash) {
+      DeleteFileW(tmp.c_str()); done("Checksum mismatch."); return;
+    }
+    if (!MoveFileExW(tmp.c_str(), setup.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+      DeleteFileW(tmp.c_str()); done("Could not save installer."); return;
+    }
+    postUi([ver, setup, manual, replyId] {
+      if (manual) replyUi(replyId, "Speed Force " + ver + " is ready.");
       notice("Speed Force " + ver + " is ready.", {{"label", "Update & restart"}, {"updateSetup", U8(setup)}});
     });
   }).detach();
@@ -1659,7 +1678,7 @@ static json settingsView() {
   json eng = json::array();
   for (auto& [n, b] : searchEngines()) eng.push_back(n);
   s["engines"] = eng;
-  s["version"] = "2.0.0";
+  s["version"] = SF_VERSION;
   s["built"] = "C++ / WebView2";
   return s;
 }
@@ -2026,6 +2045,7 @@ static void handleUi(const json& m) {
   else if (c == "engineVersion") {
     runProcess(ytCommand({"--version"}), ytEnv(), nullptr, [=](RunResult rr) { replyUi(id, trim(rr.code == 0 ? rr.out : string("unknown"))); });
   }
+  else if (c == "checkAppUpdate") { checkAppUpdate(true, id); }
   else if (c == "updateEngine") {
     runProcess(ytCommand({"-U"}), ytEnv(), nullptr, [=](RunResult rr) {
       string r = rr.code != 0 ? "Update failed: " + shortError(rr.err) : (rr.out.find("up to date") != string::npos || rr.out.find("up-to-date") != string::npos) ? "Already up to date" : "Updated";

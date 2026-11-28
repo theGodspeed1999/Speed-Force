@@ -370,7 +370,8 @@ async function settingsView() {
       h('div', { class: 'flex' }, home, h('button', { class: 'btn', onclick: () => set({ home: home.value.trim() || 'https://sf.start/' }) }, 'Save'))),
     h('div', { class: 'set' }, h('label', {}, 'Privacy'),
       h('button', { class: 'btn', onclick: async e => { e.target.textContent = await cmd('clearSiteData'); } }, 'Clear cookies and site data')),
-    h('div', { class: 'set' }, h('label', {}, 'About'), h('div', { class: 's' }, `Speed Force ${S.version} (${S.built})`)),
+    h('div', { class: 'set' }, h('label', {}, 'About'), h('div', { class: 's' }, `Speed Force ${S.version} (${S.built})`),
+      (() => { const msg = h('div', { class: 's' }); const btn = h('button', { class: 'btn', onclick: async () => { btn.disabled = true; msg.textContent = 'Checking GitHub…'; msg.textContent = await cmd('checkAppUpdate'); btn.disabled = false; } }, 'Check for updates'); return h('div', {}, h('div', { class: 'flex' }, btn), msg); })()),
   ];
 }
 

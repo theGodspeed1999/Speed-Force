@@ -590,6 +590,7 @@
   // --- whatever calls itself an ad ---
   // A box labelled "Advertisement" is an ad, whatever network it comes from.
   var AD_LABEL = /^(advertisements?|advertising|adverts?|ads|sponsored|sponsored (ads?|links?|content)|ads? by .{1,20}|publicidad|publicit[eé]|werbung|anzeige|реклама|विज्ञापन|广告)$/i;
+  var PROMO_BANNER = /\b(get access|full video here|watch & download|download full video|unlock full video|build the ai girl|your ai girlfriend)\b/i;
   function labelledBox(label) {
     var best = null, up = label.parentElement;
     for (var k = 0; k < 4 && up && up !== document.body && up !== document.documentElement; k++, up = up.parentElement) {
@@ -602,18 +603,31 @@
     return best || label;
   }
   function scanLabels() {
-    var n = 0, c = document.querySelectorAll('div,span,p,small,center,aside,section,h1,h2,h3,h4,h5,h6,strong,b,i,em,font');
+    var n = 0, c = document.querySelectorAll('div,span,p,small,center,aside,section,h1,h2,h3,h4,h5,h6,strong,b,i,em,font,a');
     for (var i = 0; i < c.length && i < 15000; i++) {
       var el = c[i];
-      if (el.firstElementChild || el.hasAttribute('data-vgad')) continue;
+      if (el.hasAttribute('data-vgad')) continue;
       var t = (el.textContent || '').trim();
-      if (t.length < 3 || t.length > 30 || !AD_LABEL.test(t)) continue;
-      if (el.closest('a,button,nav,header,footer,li,[role="button"],[role="menu"],[data-vgad]')) continue;
-      var box = labelledBox(el);
-      if (box !== el) { box.setAttribute('data-vgov', ''); box.setAttribute('data-vgad', ''); }
-      el.setAttribute('data-vgov', '');
-      el.setAttribute('data-vgad', '');
-      n++;
+      var isAdTag = t === 'AD' || t === 'Ad';
+      if (!el.firstElementChild && t.length >= 2 && t.length <= 30 && (isAdTag || AD_LABEL.test(t))) {
+        if (el.closest(isAdTag ? 'button,nav,header,footer,li,[role="button"],[role="menu"],[data-vgad]' : 'a,button,nav,header,footer,li,[role="button"],[role="menu"],[data-vgad]')) continue;
+        var box = labelledBox(el);
+        if (box !== el) { box.setAttribute('data-vgov', ''); box.setAttribute('data-vgad', ''); }
+        el.setAttribute('data-vgov', '');
+        el.setAttribute('data-vgad', '');
+        n++;
+        continue;
+      }
+      if ((el.tagName === 'A' || el.tagName === 'DIV') && t.length >= 8 && t.length <= 120 && PROMO_BANNER.test(t)) {
+        if (el.closest('nav,header,footer,[data-vgad]') || el.querySelector('input,form,video,[data-videograb]')) continue;
+        if (el.tagName === 'DIV' && !el.querySelector('a[href]')) continue;
+        var r = el.getBoundingClientRect();
+        if (r.height > 0 && r.height <= 140 && !hasRealVideo(el)) {
+          el.setAttribute('data-vgov', '');
+          el.setAttribute('data-vgad', '');
+          n++;
+        }
+      }
     }
     return n;
   }
@@ -936,7 +950,8 @@
         continue;
       }
       var r = v.getBoundingClientRect();
-      var visible = r.width >= 80 && r.height >= 50 && r.bottom > 0 && r.right > 0 && r.top < H && r.left < W;
+      var inAd = v.closest && v.closest('[data-vgad]');
+      var visible = !inAd && r.width >= 80 && r.height >= 50 && r.bottom > 0 && r.right > 0 && r.top < H && r.left < W;
       todo.push([v.__vgButton, visible, Math.max(4, r.top + 8) + 'px', Math.max(4, r.left + 8) + 'px']);
     }
     for (i = 0; i < todo.length; i++) {
