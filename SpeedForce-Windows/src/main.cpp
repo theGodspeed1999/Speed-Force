@@ -16,7 +16,7 @@
 #include "tor.h"
 
 #define APP_NAME L"Speed Force"
-#define SF_VERSION "1.5.0"
+#define SF_VERSION "1.5.1"
 static const char* kStartUrl = "https://sf.start/";
 // The image search page is ours (assets\lens), shown under Lens' own address: Lens refuses uploads that come from elsewhere.
 static const char* kLensUrl = "https://lens.google.com/speedforce/";

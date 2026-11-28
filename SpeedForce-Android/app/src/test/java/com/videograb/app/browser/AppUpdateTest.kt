@@ -7,11 +7,11 @@ import org.junit.Test
 class AppUpdateTest {
     @Test
     fun versionComparison() {
-        assertTrue(AppUpdate.isNewer("v1.5.1", "1.5.0"))
-        assertTrue(AppUpdate.isNewer("v1.6.0", "1.5.0"))
-        assertTrue(AppUpdate.isNewer("2.0.0", "1.5.0"))
-        assertFalse(AppUpdate.isNewer("v1.5.0", "1.5.0"))
-        assertFalse(AppUpdate.isNewer("v1.4.0", "1.5.0"))
-        assertFalse(AppUpdate.isNewer("", "1.5.0"))
+        assertTrue(AppUpdate.isNewer("v1.5.2", "1.5.1"))
+        assertTrue(AppUpdate.isNewer("v1.6.0", "1.5.1"))
+        assertTrue(AppUpdate.isNewer("2.0.0", "1.5.1"))
+        assertFalse(AppUpdate.isNewer("v1.5.1", "1.5.1"))
+        assertFalse(AppUpdate.isNewer("v1.5.0", "1.5.1"))
+        assertFalse(AppUpdate.isNewer("", "1.5.1"))
     }
 }
